@@ -75,6 +75,13 @@ let telemetry: Telemetry | undefined;
 export function getTelemetry(): Telemetry {
   if (telemetry) return telemetry;
 
+  // SEC FORK: telemetry is opt-in. Set PREMIERE_MCP_SEC_TELEMETRY=allow to
+  // restore the upstream behavior of honoring POSTHOG_API_KEY.
+  if ((process.env.PREMIERE_MCP_SEC_TELEMETRY ?? "deny") !== "allow") {
+    telemetry = disabledTelemetry;
+    return telemetry;
+  }
+
   const apiKey = process.env.POSTHOG_API_KEY;
   if (!apiKey) {
     telemetry = disabledTelemetry;
