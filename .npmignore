@@ -27,3 +27,6 @@ Thumbs.db
 
 # SEC FORK: the CEP DevTools manifest (local debug port) must never ship in the npm tarball
 cep-plugin/.debug
+
+# SEC FORK: CEP DevTools manifests must never ship (any depth)
+**/.debug
