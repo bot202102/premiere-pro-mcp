@@ -509,6 +509,10 @@ function restoreScheduledUpdateStatus() {
 }
 
 function checkForUpdates() {
+  if (String(nodeProcess && nodeProcess.env && nodeProcess.env.PREMIERE_MCP_SEC_CHECK_UPDATE_NET || "") !== "1") {
+    showUpdateCheckError("SEC FORK: network update check disabled (set PREMIERE_MCP_SEC_CHECK_UPDATE_NET=1 to allow it).");
+    return;
+  }
   latestUpdate = null;
   var globalInstall = os.platform() === "win32" ? getPerUserGlobalInstall() : null;
   var responseTooLarge = false;
@@ -645,16 +649,17 @@ function handleUpdateClick() {
   try {
     var childProcess = nodeRequire("child_process");
     var nodeCrypto = nodeRequire("crypto");
-    var scheduled = MCPBridgeUpdater.scheduleWindowsGlobalUpdate({
-      cliPath: cliPath,
-      runtime: {
-        fs: fs,
-        path: path,
-        os: os,
-        childProcess: childProcess,
-        crypto: nodeCrypto,
-      },
-    });
+      var scheduled = MCPBridgeUpdater.scheduleWindowsGlobalUpdate({
+        cliPath: cliPath,
+        runtime: {
+          fs: fs,
+          path: path,
+          os: os,
+          childProcess: childProcess,
+          crypto: nodeCrypto,
+          process: nodeProcess,
+        },
+      });
     saveUpdateStatusPath(scheduled.statusPath);
     setUpdateUI(
       "Update scheduled",

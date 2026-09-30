@@ -141,6 +141,11 @@
   function scheduleWindowsGlobalUpdate(options) {
     if (!options || !options.runtime) throw new Error("A local updater runtime is required.");
     var runtime = options.runtime;
+    // SEC FORK: the @latest global auto-update is opt-in in this fork. Set
+    // PREMIERE_MCP_SEC_ALLOW_LATEST=1 to restore the upstream behavior.
+    if (String(runtime.process && runtime.process.env.PREMIERE_MCP_SEC_ALLOW_LATEST || "") !== "1") {
+      throw new Error("SEC FORK: global @latest auto-update disabled (set PREMIERE_MCP_SEC_ALLOW_LATEST=1 to allow it).");
+    }
     var fs = runtime.fs;
     var path = runtime.path;
     var os = runtime.os;
