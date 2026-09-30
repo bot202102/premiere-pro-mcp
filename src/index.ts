@@ -26,6 +26,18 @@ const debugEnabled = /^(1|true|yes|on|debug)$/i.test(
   process.env.PREMIERE_MCP_DEBUG ?? "",
 );
 
+// --- SEC FORK hardening switches (the defaults are the hardened state) ---
+// PREMIERE_MCP_SEC_ALLOW_LATEST=1     -> upstream behavior: allow `--update` to install premiere-pro-mcp@latest
+// PREMIERE_MCP_SEC_CHECK_UPDATE_NET=1 -> upstream behavior: allow npm network version checks
+// PREMIERE_MCP_SEC_DEFAULT_PROFILE=0  -> upstream behavior: full tool profile when PREMIERE_MCP_CAPABILITIES is unset
+const secAllowLatest = ["1", "true", "yes", "on"].includes(
+  (process.env.PREMIERE_MCP_SEC_ALLOW_LATEST ?? "").toLowerCase(),
+);
+const secCheckUpdateNet = ["1", "true", "yes", "on"].includes(
+  (process.env.PREMIERE_MCP_SEC_CHECK_UPDATE_NET ?? "").toLowerCase(),
+);
+const secDefaultProfileOn = (process.env.PREMIERE_MCP_SEC_DEFAULT_PROFILE ?? "1") !== "0";
+
 function debugLog(message: string): void {
   if (debugEnabled) {
     console.error(`[premiere-pro-mcp] ${message}`);
@@ -113,6 +125,11 @@ async function runPackageUpdate(apply: boolean): Promise<void> {
     process.exit(1);
   }
 
+  if (!secAllowLatest) {
+    console.error("SEC FORK: global @latest update blocked (PREMIERE_MCP_SEC_ALLOW_LATEST=0). Install a verified fork tarball instead.");
+    process.exit(1);
+  }
+
   const npm = npmInvocation();
   console.log(`Updating premiere-pro-mcp ${update.currentVersion} → ${update.latestVersion} and refreshing the Premiere connector...`);
   try {
@@ -192,6 +209,10 @@ if (updateActions.length > 1) {
   process.exit(1);
 }
 if (updateActions.length === 1) {
+  if (!secCheckUpdateNet) {
+    console.log("SEC FORK: npm network update check disabled (PREMIERE_MCP_SEC_CHECK_UPDATE_NET=0).");
+    process.exit(0);
+  }
   await runPackageUpdate(updateActions[0] === "--update");
   process.exit(0);
 }
@@ -328,6 +349,15 @@ if (cepActions.length === 1) {
 
 async function main() {
   process.env.PREMIERE_MCP_TRANSPORT = "stdio";
+
+  // SEC FORK: default to a reduced authority profile unless the operator opted
+  // into the full upstream tool surface with PREMIERE_MCP_SEC_DEFAULT_PROFILE=0
+  // or set an explicit PREMIERE_MCP_CAPABILITIES.
+  if (!process.env.PREMIERE_MCP_CAPABILITIES && secDefaultProfileOn) {
+    process.env.PREMIERE_MCP_CAPABILITIES = "inspect,edit";
+    process.env.PREMIERE_MCP_TOOL_PACKS ??= "essential,captions,delivery";
+  }
+
   const protocolMode = readMcpProtocolMode();
   const telemetry = getTelemetry();
   const bridgeOptions = {
