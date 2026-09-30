@@ -28,7 +28,13 @@ describe("CEP installation metadata", () => {
     const panel = readFileSync(join(root, "after-effects-cep-plugin", "main.js"), "utf8");
     const cli = readFileSync(join(root, "src", "index.ts"), "utf8");
 
-    expect(pkg.files).toContain("after-effects-cep-plugin");
+    // SEC FORK: plugin directories are whitelisted file-by-file so cep-plugin/.debug
+    // can never ship; assert the After Effects connector files individually instead.
+    expect(pkg.files).toContain("after-effects-cep-plugin/CSXS");
+    expect(pkg.files).toContain("after-effects-cep-plugin/main.js");
+    expect(pkg.files).toContain("cep-plugin/CSXS");
+    expect(pkg.files).toContain("cep-plugin/main.js");
+    expect(pkg.files).not.toContain("cep-plugin/.debug");
     expect(manifest).toContain(`ExtensionBundleVersion="${pkg.version}"`);
     expect(manifest).toContain('<Host Name="AEFT" Version="15.0"/>');
     expect(panel).toContain("after-effects-mcp-bridge");
