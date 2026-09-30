@@ -282,3 +282,35 @@ dependencias salvo allowlist**. Hoy la única dep con install script es `fsevent
   sincronización upstream, y se re-ejecuta el diff de grafos (213 paquetes) antes de confiar.
 - En el merge checklist: si upstream cambia su bloque `overrides`, actualizar los pins de
   `pnpm-workspace.yaml`.
+
+## 11. Configuración de seguridad de pnpm + auditoría por familias (2026-09-30)
+
+**Settings en `pnpm-workspace.yaml`** (verificados contra pnpm 12.8.1; unidad de
+`minimumReleaseAge`: **minutos**):
+
+| Setting | Valor | Efecto |
+|---|---|---|
+| `minimumReleaseAge` | `10080` (7 días) | No resuelve versiones publicadas hace menos de 7 días — periodo de curado para que la comunidad las pruebe. Knobs: 30 d = 43200, 60 d = 86400 |
+| `minimumReleaseAgeExclude` | `[]` | Escape solo para parches de seguridad urgentes |
+| `onlyBuiltDependencies` | `[]` | **Ninguna** dependencia puede ejecutar scripts de ciclo de vida |
+| `strictDepBuilds` | `true` | El install FALLA si una dep nueva trae scripts bloqueados (tripwire, no warning) |
+| `verifyDepsBeforeRun` | `error` | Falla cualquier script npm si node_modules no coincide con el lockfile |
+| `engineStrict` | `true` | Exige engines.node (>=20.19) |
+| `saveExact` | `true` | Dependencias nuevas se fijan exactas (audit-friendly) |
+
+pnpm 12 verifica **todo el lockfile contra estas políticas en cada install**
+("Lockfile passes supply-chain policies"). Con 60 días fallaban 45 entradas del
+grafo actual; el gate de 7 días pasa porque la versión más joven tiene 9 días
+(`@typescript-eslint@8.70.1`, `@posthog/core@1.55.1`, ambas del 2026-09-21).
+
+**Parche aplicado**: `brace-expansion` (transitiva dev-only de la cadena eslint,
+advisories high/moderate de clase DoS) 1.1.18→1.1.21 y 5.0.9→5.0.12 — único drift
+del lockfile auditado, verificado con git diff. Tras el parche: **npm audit 0,
+pnpm audit 0**.
+
+**Auditoría por familias** (`scripts/sec-audit-families.mjs`, informe:
+`AUDIT-FAMILIAS-2026-09-30.md`): 213 paquetes únicos — **11 runtime** (MCP core ×4,
+telemetría PostHog ×3, puente hono/jose/ws ×3... +zod), 202 dev. Resultados:
+0 deprecated en runtime (solo `eslint@9.39.5`, dev), 0 scripts de instalación en
+disco, todas las runtime son MIT, edad 9–71 días, 1 maintainer en jose/ws/hono/zod
+(bus-factor bajo a conocer). Re-ejecutar tras cada merge upstream y comparar.
