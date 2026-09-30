@@ -217,3 +217,40 @@ y con flag 6 en `deny`, el arranque no imprime `[premiere-pro-mcp] PostHog telem
 (`bridge-directory-security.cjs`), escape de cadenas ExtendScript (U+2028/2029,
 metacaracteres), rechazo de argumentos desconocidos, fail-closed en export/efectos,
 `-protocol_whitelist` de ffmpeg, y la tokenización de confirmación de `edit-plan`.
+
+## 9. Registro de ejecución (2026-09-30)
+
+Todos los parches aplicados en la rama `sec/hardening`, un commit por mitigación.
+
+| Commit | Contenido |
+|---|---|
+| `b282c05` | Este plan |
+| `f33d2fe` | SEC 1+3 — `install-cep.ps1`: escrituras PlayerDebugMode y `.debug` tras `PREMIERE_MCP_SEC_*` (diagnóstico también gateado) |
+| `c182c39` | SEC 2 — `uninstall-cep.ps1`: revoca CSXS.9–14 al desinstalar (default ON) |
+| `1ef10ba` | SEC 1 — instalador C#: escrituras de registro opt-in |
+| `1989e3b` | SEC 4+5+8 — CLI: bloquea `@latest`, gatea chequeo de red, perfil reducido por defecto |
+| `d44c88b` | SEC 4+5 — panel CEP: guard en updater y chequeo de red |
+| `e90b2ff` | SEC 6 — telemetría opt-in (`deny` por defecto) |
+| `5352bc0` | SEC 7 — transporte HTTP aborta salvo flag |
+| `10714e5` + `119a8d0`/`beed6e7` | Estático `.npmignore` + decisión de versionado (ver abajo) |
+| `5fd3615`, `f6f9f74` | Tests: runtime del updater lleva `process`; whitelist por archivo; SHA-256 del tarball |
+
+**Desviación del esquema de versionado (sección 4):** el bump a `1.18.6-sec.1`
+desalineaba los tests upstream de coherencia de versiones (manifiestos CEP,
+plugins Claude/Codex, MCPB) — guardrail upstream intencional. El paquete mantiene
+`1.18.6`; la identidad del fork vive en el tag git `sec/1.18.6-1` y en
+`SHA256SUMS.txt`.
+
+**Hallazgo de empaquetado:** con un array `files` en package.json, npm ignora
+`.npmignore` dentro de los directorios incluidos, por lo que `cep-plugin/.debug`
+seguía en el tarball. Solución: whitelist por archivo de `cep-plugin/` y
+`after-effects-cep-plugin/` en `files` (verificado: 0 archivos `.debug`).
+
+**Validación:**
+- `tsc` limpio; smoke tests de flags 5 y 7 (bloqueo default + ruta upstream con flag).
+- Suite completa en modo permisivo (`SEC_*`=1/allow): **4055 passed / 0 failed** (1 skipped upstream).
+- Tarball: `premiere-pro-mcp-1.18.6.tgz` —
+  `6d6af9fdb90acfc6b3a6c889a2711d3f271b3918a856126d3a3bd4cebc4b293c`
+  ( registrado en `SHA256SUMS.txt` ).
+- Instalador C# (`Program.cs`): parcheado pero sin build .NET local (no hay SDK
+  verificado en esta máquina); no forma parte del camino de instalación npm.
