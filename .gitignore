@@ -46,3 +46,6 @@ npm-debug.log*
 # Local browser verification artifacts
 .playwright-cli/
 output/playwright/
+
+# SEC FORK: los artefactos de release se documentan por SHA en SHA256SUMS.txt, no se versionan
+*.tgz

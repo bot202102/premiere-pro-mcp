@@ -74,6 +74,7 @@ import {
   resolveCapabilities,
 } from "./security/index.js";
 import { capabilitiesForToolInvocation } from "./security/capabilities.js";
+import { RenderAttemptGuard, wrapWithRenderGuard } from "./security/render-guard.js";
 import { EXTENDSCRIPT_REFERENCE } from "./resources/extendscript-reference.js";
 import { getLiveContextResources } from "./resources/live-context-resources.js";
 import { PROJECT_CONTEXT_RESOURCE } from "./context/project-context-resource.js";
@@ -383,6 +384,10 @@ export function createServer(
 ): McpServer {
 
   const capabilities = resolveCapabilities();
+  // SEC FORK: per-session circuit breaker for render/export tools (see
+  // security/render-guard.ts). One instance per createServer call = one per
+  // stdio session.
+  const renderGuard = new RenderAttemptGuard();
   const toolPacks = serverOptions.toolPacks === undefined
     ? resolveToolPacks()
     : resolveToolPacks(serverOptions.toolPacks, "explicit");
@@ -455,7 +460,11 @@ export function createServer(
     }
 
     const inputSchema = jsonSchemaToInputSchema(tool.parameters);
-    const guardedHandler = guardToolHandler(name, withFrameRateDefaultWarning(tool), capabilities);
+    const guardedHandler = wrapWithRenderGuard(
+      name,
+      guardToolHandler(name, withFrameRateDefaultWarning(tool), capabilities),
+      renderGuard,
+    );
 
     const annotations = annotationsForTool(name);
     server.registerTool(

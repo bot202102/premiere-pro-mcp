@@ -371,3 +371,22 @@ ya existía en el proyecto: `PREMIERE_TEMP_DIR`.
 **Pendiente del usuario:** reiniciar Codex para que cargue el server nuevo; abrir el panel
 (Window > Extensions > MCP Bridge = Running); abrir proyecto desechable y ejecutar
 `verify_premiere_connection` desde Codex (debe pasar a "ready"); Fase C.
+
+## 15. SEC 9 — Render circuit breaker (2026-09-30, issue #687)
+
+Tras dejar Premiere medio colgado martillando 4 rutas de render que fallaban en
+una sesión automatizada (ver issue upstream #687), se añade el noveno
+interruptor: **`PREMIERE_MCP_SEC_RENDER_GUARD`** (default `1` = activado).
+
+- `RenderAttemptGuard` (`src/security/render-guard.ts`, integrado en
+  `server.ts` junto a `guardToolHandler`): cuenta intentos fallidos por sesión
+  de las tools que invocan el renderizador/AME (`export_sequence`,
+  `export_frame`, `export_sequence_review_frames`, `export_sequence_marker_review_frames`,
+  `export_sequence_clip_review_frames`, `add_to_render_queue`,
+  `encode_project_item`, `encode_file`).
+- Tras **2 fallos** (`PREMIERE_MCP_SEC_MAX_RENDER_ATTEMPTS`, default 2) las
+  siguientes llamadas se rechazan localmente con mensaje honesto: "NOT sent to
+  Premiere". Cualquier render exitoso resetea el contador.
+- `PREMIERE_MCP_SEC_RENDER_GUARD=0` lo desactiva (modo upstream).
+- Tests: 5 nuevos (`tests/security/render-guard.test.ts`); suite completa
+  **233 archivos / 4060 passed** en modo permisivo.
