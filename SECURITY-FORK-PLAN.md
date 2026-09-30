@@ -346,3 +346,28 @@ Revisión de regresión sobre `sec/hardening` tras las 3 iteraciones:
 - **Fase B completada** (Premiere 2026 instalado y cerrado): demostración en vivo del interruptor — install con flag OFF dejó el registro intacto y sin `.debug`; con `PREMIERE_MCP_SEC_PLAYERDEBUGMODE=1` escribió CSXS.9–14 = "1" REG_SZ; `--diagnose-cep` = "Connector installation looks ready". El conector es el dev bundle (sin ZXP firmado en el tarball, como avisa el script).
 - **Program.cs validado por fin** (subagente): .NET SDK 10.0.401 user-local en carpeta temporal; build con `-p:ConnectorPackage=artifacts\MCPBridgeCEP.zxp` (generado por `build-signed-cep.ps1`) → **0 warnings / 0 errores**; `--verify-only` → exit 0.
 - **Pendiente del usuario**: pegar el TOML de `--print-client-config codex` en su config de Codex, abrir Premiere, confirmar panel Window > Extensions > MCP Bridge = Running, y ejecutar `verify_premiere_connection` desde Codex con proyecto desechable (Fase C).
+
+## 14. Lanzamiento (2026-09-30) — PUENTE EN VIVO
+
+**Prueba end-to-end superada**: `ping` vía MCP stdio → puente → panel CEP → Premiere 26.5.2 respondió
+`{"connected": true, "premiereVersion": "26.5.2", "projectName": "No project open"}`.
+`verify_premiere_connection` respondió con su esquema first-run (safeCheck readOnly); `get_project_info`
+falló de forma honesta porque no hay proyecto abierto (esperado).
+
+**Hallazgo de interacción (dos sistemas de seguridad chocando):** el grupo `CodexSandboxUsers`
+(dueno de la sandbox del Codex CLI) tiene Modify heredado en `%TEMP%`. El guard del puente de
+premiere-mcp detecta "identidad no confiable con derechos de reemplazo" y **se niega a arrancar
+(fail-closed correcto)** — primero por ACL del propio dir, luego por ancestro. El escape correcto
+ya existía en el proyecto: `PREMIERE_TEMP_DIR`.
+
+**Solución aplicada en esta máquina:**
+1. Puente reubicado a `C:\Users\rpach\AppData\Local\PremiereMCPBridge` (cadena de ancestros limpia:
+   CodexSandboxUsers solo tiene RX allí; ACL propia protegida: rpach + SYSTEM + Admins).
+2. `setx PREMIERE_TEMP_DIR` (env de usuario) + bloque `[mcp_servers.premiere-pro-leancoderkavy.env]`
+   en `~/.codex/config.toml` (TOML validado con @iarna/toml; backup previo en
+   `config.toml.bak-premiere-20260930`).
+3. Premiere reiniciado con el nuevo entorno; el panel CEP usa el mismo dir que el servidor.
+
+**Pendiente del usuario:** reiniciar Codex para que cargue el server nuevo; abrir el panel
+(Window > Extensions > MCP Bridge = Running); abrir proyecto desechable y ejecutar
+`verify_premiere_connection` desde Codex (debe pasar a "ready"); Fase C.
