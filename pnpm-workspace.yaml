@@ -1,0 +1,11 @@
+# SEC FORK: pnpm 12 settings live here (package.json "pnpm" field is no longer read).
+# These overrides pin the exact versions audited in the npm package-lock.json graph
+# (upstream's npm `overrides` are silently dropped by `pnpm import`).
+# Merge checklist: if upstream changes its `overrides` block, update the pins here,
+# re-run `corepack pnpm import && corepack pnpm install --frozen-lockfile`, and
+# re-run the graph diff before trusting the pnpm lane.
+overrides:
+  "@hono/node-server": 2.0.11
+  hono: 4.13.8
+  js-yaml: 4.3.2
+  nanoid: 3.3.18

@@ -254,3 +254,31 @@ seguía en el tarball. Solución: whitelist por archivo de `cep-plugin/` y
   ( registrado en `SHA256SUMS.txt` ).
 - Instalador C# (`Program.cs`): parcheado pero sin build .NET local (no hay SDK
   verificado en esta máquina); no forma parte del camino de instalación npm.
+
+## 10. Vía pnpm (validada 2026-09-30, opcional)
+
+Evaluación con pnpm 12.8.1 (vía `corepack pnpm`, incluido en Node 24) sobre `sec/hardening`.
+
+**Hallazgos de la migración (probados, no supuestos):**
+1. `pnpm import` **descarta el bloque `overrides` de npm** sin avisar: `@hono/node-server`
+   bajó de 2.0.11 a 1.19.17 (major). Corregido con `pnpm-workspace.yaml` (nuevo hogar de
+   la configuración en pnpm 12 — el campo `pnpm` de package.json ya no se lee) fijando
+   las versiones exactas auditadas. Grafo resultante: **213 = 213, cero diferencias**.
+2. El layout estricto de pnpm **cazó un phantom dependency upstream**: el test
+   `extendscript-es3-syntax.test.ts` importa `acorn` sin declararlo (npm lo tolera por
+   hoisting plano). Declarado como devDependency exacta `acorn@8.18.0` (misma versión
+   que ya había en el grafo) — pasa bajo pnpm y bajo npm.
+
+**Ganancia de seguridad principal:** pnpm 10+ **no ejecuta scripts de ciclo de vida de
+dependencias salvo allowlist**. Hoy la única dep con install script es `fsevents`
+(macOS); el valor real es como tripwire en futuros merges upstream.
+
+**Reglas de la vía pnpm:**
+- Local: `corepack pnpm install --frozen-lockfile` (instalación), `corepack pnpm vitest run`.
+- El tarball de release se sigue construyendo con `npm pack` (SHA único en SHA256SUMS.txt);
+  verificado que `pnpm pack` produce contenidos idénticos.
+- `package-lock.json` permanece como referencia del grafo auditado; `pnpm-lock.yaml` se
+  regenera con `corepack pnpm import && corepack pnpm install --frozen-lockfile` tras cada
+  sincronización upstream, y se re-ejecuta el diff de grafos (213 paquetes) antes de confiar.
+- En el merge checklist: si upstream cambia su bloque `overrides`, actualizar los pins de
+  `pnpm-workspace.yaml`.
