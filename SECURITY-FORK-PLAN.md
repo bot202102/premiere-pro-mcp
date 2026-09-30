@@ -339,3 +339,10 @@ Revisión de regresión sobre `sec/hardening` tras las 3 iteraciones:
   http-server aborta por defecto; `install-cep.ps1 -Diagnose` ejecutado de verdad
   e imprimiendo el mensaje del gate SEC (solo lectura, sin tocar registro).
 - Program.cs sigue sin build .NET local (sin SDK en esta máquina; documentado).
+
+## 13. Despliegue en la máquina del usuario (2026-09-30)
+
+- **Fase A completada**: SHA verificado (`sha256sum -c` OK), `npm install -g ./premiere-pro-mcp-1.18.6.tgz`, `--version` 1.18.6, `--doctor` correcto. Handshake MCP real contra el binario instalado: protocolo 2025-06-18, **21 tools** (perfil reducido activo), **cero unsafe-script**.
+- **Fase B completada** (Premiere 2026 instalado y cerrado): demostración en vivo del interruptor — install con flag OFF dejó el registro intacto y sin `.debug`; con `PREMIERE_MCP_SEC_PLAYERDEBUGMODE=1` escribió CSXS.9–14 = "1" REG_SZ; `--diagnose-cep` = "Connector installation looks ready". El conector es el dev bundle (sin ZXP firmado en el tarball, como avisa el script).
+- **Program.cs validado por fin** (subagente): .NET SDK 10.0.401 user-local en carpeta temporal; build con `-p:ConnectorPackage=artifacts\MCPBridgeCEP.zxp` (generado por `build-signed-cep.ps1`) → **0 warnings / 0 errores**; `--verify-only` → exit 0.
+- **Pendiente del usuario**: pegar el TOML de `--print-client-config codex` en su config de Codex, abrir Premiere, confirmar panel Window > Extensions > MCP Bridge = Running, y ejecutar `verify_premiere_connection` desde Codex con proyecto desechable (Fase C).
