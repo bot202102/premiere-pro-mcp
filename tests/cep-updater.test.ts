@@ -81,6 +81,7 @@ describe("CEP connector updater", () => {
       os: { tmpdir: () => "C:\\Temp" },
       childProcess: { spawn },
       crypto: { randomBytes: () => Buffer.from("abcdef", "hex") },
+      process: { env: { PREMIERE_MCP_SEC_ALLOW_LATEST: "1" } },
     };
     const cliPath = "C:\\Users\\editor\\AppData\\Roaming\\npm\\premiere-pro-mcp.cmd";
     const scheduled = updater.scheduleWindowsGlobalUpdate({ cliPath, runtime });
@@ -105,5 +106,25 @@ describe("CEP connector updater", () => {
     expect(() => updater.scheduleWindowsGlobalUpdate({ cliPath, runtime: failingRuntime }))
       .toThrow("launch failed");
     expect(runtime.fs.unlinkSync).toHaveBeenCalled();
+  });
+
+  it("SEC FORK: refuses the @latest auto-update unless PREMIERE_MCP_SEC_ALLOW_LATEST=1", () => {
+    const runtime = {
+      fs: { existsSync: vi.fn(() => true) },
+      path: win32,
+      os: { tmpdir: () => "C:\\Temp" },
+      childProcess: { spawn: vi.fn() },
+      crypto: { randomBytes: () => Buffer.from("abcdef", "hex") },
+    };
+    const cliPath = "C:\\Users\\editor\\AppData\\Roaming\\npm\\premiere-pro-mcp.cmd";
+    expect(() => updater.scheduleWindowsGlobalUpdate({ cliPath, runtime }))
+      .toThrow("PREMIERE_MCP_SEC_ALLOW_LATEST");
+
+    const explicitlyAllowed = {
+      ...runtime,
+      process: { env: { PREMIERE_MCP_SEC_ALLOW_LATEST: "1" } },
+    };
+    expect(() => updater.scheduleWindowsGlobalUpdate({ cliPath: "relative.cmd", runtime: explicitlyAllowed }))
+      .not.toThrow("PREMIERE_MCP_SEC_ALLOW_LATEST");
   });
 });
