@@ -308,9 +308,34 @@ advisories high/moderate de clase DoS) 1.1.18→1.1.21 y 5.0.9→5.0.12 — úni
 del lockfile auditado, verificado con git diff. Tras el parche: **npm audit 0,
 pnpm audit 0**.
 
-**Auditoría por familias** (`scripts/sec-audit-families.mjs`, informe:
+**Auditoría por familias** (`sec-tools/sec-audit-families.mjs`, informe:
 `AUDIT-FAMILIAS-2026-09-30.md`): 213 paquetes únicos — **11 runtime** (MCP core ×4,
 telemetría PostHog ×3, puente hono/jose/ws ×3... +zod), 202 dev. Resultados:
 0 deprecated en runtime (solo `eslint@9.39.5`, dev), 0 scripts de instalación en
 disco, todas las runtime son MIT, edad 9–71 días, 1 maintainer en jose/ws/hono/zod
 (bus-factor bajo a conocer). Re-ejecutar tras cada merge upstream y comparar.
+
+## 12. Revisión post-integración (2026-09-30) — qué se rompió y estado final
+
+Revisión de regresión sobre `sec/hardening` tras las 3 iteraciones:
+
+1. **Roto: el tarball llevaba la herramienta de auditoría** (`scripts/` está en la
+   whitelist `files`), por lo que el SHA-256 de `SHA256SUMS.txt` ya no describía lo
+   que produce un rebuild. **Arreglo:** herramienta movida a `sec-tools/` (fuera de
+   la whitelist); tarball regenerado y SHA actualizado.
+   SHA vigente: `d36b77d94ce5cb09e18dbf624d06a923b721c3ab450c9488b8b83833eeeb2b71`.
+2. **Incompleto:** las exclusiones `.debug` de `.npmignore` del experimento de
+   empaquetado no se habían commiteado. Commiteadas (redundantes con la whitelist,
+   pero documentan la intención).
+3. Ya capturado en iteraciones anteriores (y arreglado entonces): desalineación de
+   versiones por el bump `-sec.1` y el contrato `process` del runtime del updater.
+
+**Verificación final en HEAD (todo verde):**
+- Suite completa bajo npm: **232/232 archivos, 4055/4055 tests** (modo permisivo).
+- Suite completa bajo pnpm: **232/232 archivos, 4055/4055 tests** + "✓ Lockfile
+  passes supply-chain policies" (gate 7 días activo).
+- `npm run lint` ✓ · `npm run pack:check` ✓ (incluye install aislado del tarball).
+- Smoke en vivo: `--version`=1.18.6; `--check-update` bloqueado por defecto;
+  http-server aborta por defecto; `install-cep.ps1 -Diagnose` ejecutado de verdad
+  e imprimiendo el mensaje del gate SEC (solo lectura, sin tocar registro).
+- Program.cs sigue sin build .NET local (sin SDK en esta máquina; documentado).
