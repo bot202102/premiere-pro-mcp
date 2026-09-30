@@ -108,10 +108,25 @@ internal static class Program
             Directory.Move(staging, Destination);
             if (Directory.Exists(backup)) Directory.Delete(backup, true);
 
-            for (int version = 9; version <= 14; version++)
+            // SEC FORK: machine-wide CEP debug mode is opt-in. The original upstream
+            // registry writes run only when PREMIERE_MCP_SEC_PLAYERDEBUGMODE=1.
+            bool secPlayerDebugMode = Environment.GetEnvironmentVariable("PREMIERE_MCP_SEC_PLAYERDEBUGMODE")
+                is string secDebugValue
+                && (secDebugValue == "1"
+                    || secDebugValue.Equals("true", StringComparison.OrdinalIgnoreCase)
+                    || secDebugValue.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                    || secDebugValue.Equals("on", StringComparison.OrdinalIgnoreCase));
+            if (secPlayerDebugMode)
             {
-                using RegistryKey key = Registry.CurrentUser.CreateSubKey($@"SOFTWARE\Adobe\CSXS.{version}", true);
-                key.SetValue("PlayerDebugMode", "1", RegistryValueKind.String);
+                for (int version = 9; version <= 14; version++)
+                {
+                    using RegistryKey key = Registry.CurrentUser.CreateSubKey($@"SOFTWARE\Adobe\CSXS.{version}", true);
+                    key.SetValue("PlayerDebugMode", "1", RegistryValueKind.String);
+                }
+            }
+            else
+            {
+                Console.WriteLine("SEC FORK: PlayerDebugMode registry keys were not written (PREMIERE_MCP_SEC_PLAYERDEBUGMODE=0).");
             }
         }
         catch
