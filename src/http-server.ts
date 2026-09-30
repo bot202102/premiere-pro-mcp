@@ -51,6 +51,15 @@ import {
   RequestBodyTooLargeError,
 } from "./http-admission.js";
 
+// SEC FORK: the HTTP transport is opt-in in this fork. Set
+// PREMIERE_MCP_SEC_ALLOW_HTTP=1 to restore the upstream behavior.
+if (["1", "true", "yes", "on"].includes(
+  (process.env.PREMIERE_MCP_SEC_ALLOW_HTTP ?? "").toLowerCase(),
+) === false) {
+  console.error("[premiere-pro-mcp] SEC FORK: HTTP transport disabled (PREMIERE_MCP_SEC_ALLOW_HTTP=0). Use the stdio transport.");
+  process.exit(1);
+}
+
 /**
  * The product website lives in its own repository and is served from
  * https://premiere-pro-mcp.com. This process only serves MCP, health, and
