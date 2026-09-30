@@ -28,7 +28,7 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
 
     save_project_as: {
       description:
-        "Save the current project to a new .prproj path. Premiere then has the NEW copy open and closes the original, so later edits go to the copy; the result reports both paths. Use open_project to return to the original.",
+        "Save the current project to a new .prproj path. Premiere then has the NEW copy open and closes the original, so later edits go to the copy; the result reports both paths. Fails when Premiere writes no file or leaves a pre-existing path unchanged. Use open_project to return to the original.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -52,12 +52,26 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
           if (__normProjectPath(previousPath) === __normProjectPath("${target}")) {
             return __error("That is the current project's own path; use save_project instead.");
           }
+          var outputFile = new File("${target}");
+          if (!outputFile.parent || !outputFile.parent.exists) {
+            return __error("The Save As directory does not exist: " + outputFile.parent);
+          }
+          var existedBefore = !!outputFile.exists;
+          var lengthBefore = existedBefore ? Number(outputFile.length) : -1;
+          var modifiedBefore = "";
+          try { if (existedBefore) modifiedBefore = String(outputFile.modified); } catch (eSnap) {}
           project.saveAs("${target}");
-          if (!(new File("${target}")).exists) return __error("Premiere did not write ${target}; the current project is unchanged.");
+          if (!outputFile.exists || !(outputFile.length > 0)) return __error("Premiere did not write ${target}; the current project is unchanged.");
+          var modifiedAfter = "";
+          try { modifiedAfter = String(outputFile.modified); } catch (eAfter) {}
+          if (existedBefore && Number(outputFile.length) === lengthBefore && modifiedAfter === modifiedBefore) {
+            return __error("Premiere did not write a new project file at ${target} (the existing output was unchanged).");
+          }
           var activePath = app.project ? String(app.project.path || "") : "";
           var switched = __normProjectPath(activePath) === __normProjectPath("${target}");
           return __result({
             saved: true,
+            verified: true,
             path: "${target}",
             activeProjectPath: activePath,
             previousProjectPath: previousPath,

@@ -32,8 +32,12 @@ type Proj = {
  * openSequence brings its project to the front unless that timeline already
  * has focus (a new empty project keeps the previous project's timeline focused).
  */
-function host() {
-  const files = new Set(["/p/Main.prproj", "/p/Other.prproj"]);
+function host(options: { saveAsNoop?: boolean } = {}) {
+  const files = new Map<string, { length: number; modified: string }>([
+    ["/p/Main.prproj", { length: 100, modified: "t0" }],
+    ["/p/Other.prproj", { length: 80, modified: "t0" }],
+    ["/p/Backup.prproj", { length: 50, modified: "old" }],
+  ]);
   const state = { focusedSequence: "" };
   const open: Proj[] = [];
   const app: Record<string, unknown> = {};
@@ -45,7 +49,8 @@ function host() {
       activeSequence: seqs[0] ?? null,
       sequences: Object.assign({ numSequences: seqs.length }, seqs),
       saveAs: (target: string) => {
-        files.add(target);
+        if (options.saveAsNoop) return;
+        files.set(target, { length: 120, modified: "t1" });
         const copy = makeProject(target, sequenceNames);
         open.splice(open.indexOf(project), 1, copy);
         app.project = copy;
@@ -72,7 +77,14 @@ function host() {
   app.project = scratch;
   app.projects = new Proxy({}, { get: (_t, k) => (k === "numProjects" ? open.length : open[Number(k)]) });
   app.openDocument = () => false;
-  function File(this: { exists: boolean }, path: string) { this.exists = files.has(path); }
+  function File(this: { parent: { exists: boolean } }, path: string) {
+    Object.defineProperties(this, {
+      exists: { get: () => files.has(path) },
+      length: { get: () => files.get(path)?.length ?? 0 },
+      modified: { get: () => files.get(path)?.modified ?? "" },
+    });
+    this.parent = { exists: true };
+  }
   mockedSendCommand.mockImplementation(async (script: string) =>
     JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, { app, File }))));
   return { app, open, main };
@@ -98,7 +110,27 @@ describe("project lifecycle tools", () => {
       data: { activeProjectPath: "/p/Main copy.prproj", previousProjectPath: "/p/Main.prproj", previousProjectStillOpen: false, note: expect.stringContaining("later edits change the copy") },
     });
     expect((app.project as Proj).path).toBe("/p/Main copy.prproj");
+    expect(result.data).toMatchObject({ saved: true, verified: true });
     await expect(tools.save_project_as.handler({ path: "/p/notes.txt" })).resolves.toMatchObject({ success: false });
+  });
+
+  it("fails when saveAs leaves a pre-existing project file unchanged", async () => {
+    host({ saveAsNoop: true });
+    await tools.open_project.handler({ path: "/p/Main.prproj" });
+    await expect(tools.save_project_as.handler({ path: "/p/Backup.prproj" })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("existing output was unchanged"),
+    });
+  });
+
+  it("treats a rewritten pre-existing path as a verified Save As", async () => {
+    const { app } = host();
+    await tools.open_project.handler({ path: "/p/Main.prproj" });
+    await expect(tools.save_project_as.handler({ path: "/p/Backup.prproj" })).resolves.toMatchObject({
+      success: true,
+      data: { saved: true, verified: true, activeProjectPath: "/p/Backup.prproj" },
+    });
+    expect((app.project as Proj).path).toBe("/p/Backup.prproj");
   });
 
   it("closes a background project by path and leaves the active one alone", async () => {
