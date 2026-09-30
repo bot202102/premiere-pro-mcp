@@ -6,6 +6,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# --- SEC FORK hardening switches (the defaults are the hardened state) ---
+# PREMIERE_MCP_SEC_PLAYERDEBUGMODE=1 -> upstream behavior: write PlayerDebugMode=1 into HKCU\SOFTWARE\Adobe\CSXS.9-14
+# PREMIERE_MCP_SEC_SHIP_DEBUG_FILE=1 -> upstream behavior: keep .debug in the installed connector (local DevTools port 8088)
+$secPlayerDebugMode = @("1","true","yes","on") -contains ([string]$env:PREMIERE_MCP_SEC_PLAYERDEBUGMODE).ToLower()
+$secShipDebugFile   = @("1","true","yes","on") -contains ([string]$env:PREMIERE_MCP_SEC_SHIP_DEBUG_FILE).ToLower()
+
 $projectDir = Split-Path -Parent $PSScriptRoot
 $isAfterEffects = $ConnectorHost -eq "AfterEffects"
 $pluginSource = Join-Path $projectDir $(if ($isAfterEffects) { "after-effects-cep-plugin" } else { "cep-plugin" })
@@ -88,12 +94,25 @@ if (-not $Diagnose) {
     Write-Warning "No signed CEP package is present; installed the development bundle and enabled PlayerDebugMode."
   }
 
+  if (-not $secShipDebugFile) {
+    $debugFile = Join-Path $pluginDestination ".debug"
+    if (Test-Path -LiteralPath $debugFile) {
+      Remove-Item -LiteralPath $debugFile -Force
+      Write-Host "SEC FORK: removed .debug from the installed connector (CEP DevTools port stays closed). Set PREMIERE_MCP_SEC_SHIP_DEBUG_FILE=1 to keep it."
+    }
+  }
+
   # Adobe requires PlayerDebugMode to be a String value. A DWORD that happens
   # to contain 1 is ignored by CEP and the unsigned extension is not discovered.
   foreach ($version in 9..14) {
     $key = "HKCU:\SOFTWARE\Adobe\CSXS.$version"
-    New-Item -Path $key -Force | Out-Null
-    New-ItemProperty -Path $key -Name "PlayerDebugMode" -PropertyType String -Value "1" -Force | Out-Null
+    if ($secPlayerDebugMode) {
+      New-Item -Path $key -Force | Out-Null
+      New-ItemProperty -Path $key -Name "PlayerDebugMode" -PropertyType String -Value "1" -Force | Out-Null
+    }
+    else {
+      Write-Host "SEC FORK: PlayerDebugMode not written for CSXS.$version (PREMIERE_MCP_SEC_PLAYERDEBUGMODE=0)."
+    }
   }
 }
 
@@ -102,18 +121,23 @@ if (-not (Test-Path -LiteralPath (Join-Path $pluginDestination "CSXS\manifest.xm
   $problems += "Plugin manifest is missing from $pluginDestination"
 }
 
-foreach ($version in 9..14) {
-  $key = "HKCU:\SOFTWARE\Adobe\CSXS.$version"
-  $value = Get-ItemProperty -Path $key -Name "PlayerDebugMode" -ErrorAction SilentlyContinue
-  if ($null -eq $value -or [string]$value.PlayerDebugMode -ne "1") {
-    $problems += "CSXS.$version PlayerDebugMode is missing or not set to 1"
-    continue
-  }
+if ($secPlayerDebugMode) {
+  foreach ($version in 9..14) {
+    $key = "HKCU:\SOFTWARE\Adobe\CSXS.$version"
+    $value = Get-ItemProperty -Path $key -Name "PlayerDebugMode" -ErrorAction SilentlyContinue
+    if ($null -eq $value -or [string]$value.PlayerDebugMode -ne "1") {
+      $problems += "CSXS.$version PlayerDebugMode is missing or not set to 1"
+      continue
+    }
 
-  $kind = (Get-Item -Path $key).GetValueKind("PlayerDebugMode")
-  if ($kind -ne [Microsoft.Win32.RegistryValueKind]::String) {
-    $problems += "CSXS.$version PlayerDebugMode is $kind; Adobe requires REG_SZ"
+    $kind = (Get-Item -Path $key).GetValueKind("PlayerDebugMode")
+    if ($kind -ne [Microsoft.Win32.RegistryValueKind]::String) {
+      $problems += "CSXS.$version PlayerDebugMode is $kind; Adobe requires REG_SZ"
+    }
   }
+}
+else {
+  Write-Host "SEC FORK: PlayerDebugMode diagnostics skipped (switch is off by design; run with PREMIERE_MCP_SEC_PLAYERDEBUGMODE=1 to check it)."
 }
 
 $signatureFailures = Get-ChildItem -Path $env:TEMP -Filter "CEP*-PPRO.log" -File -ErrorAction SilentlyContinue |
