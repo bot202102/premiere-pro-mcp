@@ -450,3 +450,13 @@ Suite: 233 archivos / 4065 passed.
 renderizaron (~3.0 MB c/u). **El render por scripting funciona vía AME handoff.**
 `export_sequence`/`exportAsMediaDirect` sigue roto (Adobe-side, documentado en #687).
 Tarball SHA en SHA256SUMS.txt; workaround upstreamable como follow-up de #692.
+
+## 19. SEC-FIX #691: preset_path con forward slashes — 2026-10-01
+
+`create_sequence_from_preset` pasaba el path verbatim a `qe.project.newSequence`,
+que en Windows ignora silenciosamente los paths con `/` (la secuencia activa no
+cambia → error pelado). **Fix:** `path.resolve()` a separadores nativos en el lado
+Node + `existsSync` con error propio ("Preset file not found: …") en vez del genérico.
+Tests: normalización (script contiene el path nativo) + missing-file preciso.
+Suite: 233 archivos / 4067 passed. **Live:** la llamada con `C:/Program Files/…`
+del issue ahora crea la secuencia (`created: true, name: SlashTest`).
