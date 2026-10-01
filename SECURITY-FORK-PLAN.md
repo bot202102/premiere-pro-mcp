@@ -433,3 +433,20 @@ interruptor: **`PREMIERE_MCP_SEC_RENDER_GUARD`** (default `1` = activado).
 - Config de Codex completada (env: capabilities, tool packs, timeout 120 s).
 - Lección de escaping: la capa de herramienta se come un nivel de backslashes;
   en heredocs usar `\\`; args JSON largos vía stdin (`mcp-call.js` ahora acepta `-`).
+
+## 18. SEC-FIX #687: AME queue start — el render por scripting FUNCIONA (2026-09-30)
+
+**Causa raíz del estancamiento AME encontrada con el screenshot del usuario:** el
+trabajo quedaba en estado "Preparado" — la cola de AME no arranca sola en 26.5.2.
+El propio upstream documenta `app.encoder.startBatch()` como workaround CEP
+(#641/#323) pero `add_to_render_queue` nunca lo llamaba.
+
+**Fix:** `add_to_render_queue` ahora llama `app.encoder.startBatch()` tras encolar y
+reporta `queueBatchStart` en el receipt ("started" / "unavailable: ..."). Test #238
+actualizado al contrato nuevo (jamás presentar encolado como render completo).
+Suite: 233 archivos / 4065 passed.
+
+**Prueba en vivo:** ambos trabajos (el "Preparado" viejo y el nuevo) se procesaron y
+renderizaron (~3.0 MB c/u). **El render por scripting funciona vía AME handoff.**
+`export_sequence`/`exportAsMediaDirect` sigue roto (Adobe-side, documentado en #687).
+Tarball SHA en SHA256SUMS.txt; workaround upstreamable como follow-up de #692.
