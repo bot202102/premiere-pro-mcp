@@ -981,6 +981,22 @@ describe("issue #237 — reported mutations must be observable or fail", () => {
   const project = getProjectTools(bridgeOptions);
   const tracks = getTrackTargetingTools(bridgeOptions);
   const media = getMediaTools(bridgeOptions);
+
+  // #713: a missing import path must fail fast in the handler — importFiles
+  // with a nonexistent path opens a blocking modal in Premiere that wedges the
+  // CEP bridge until a restart.
+  it("refuses import_media with missing paths before Premiere is contacted", async () => {
+    await expect(media.import_media.handler({ file_paths: ["C:/no/existe.mp4"] })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("File(s) not found: C\\no\\existe.mp4"),
+    });
+  });
+
+  it("resolves forward-slash import paths to native separators before embedding them", async () => {
+    const forward = join(process.cwd(), "package.json").split(sep).join("/");
+    const script = await scriptFor(media.import_media, { file_paths: [forward] });
+    expect(script).toContain(escapeForExtendScript(resolve(forward)));
+  });
   const exports = getExportTools(bridgeOptions);
 
   it("makes trim tools read back their claimed changes", async () => {

@@ -1,5 +1,7 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 export function getMediaTools(bridgeOptions: BridgeOptions) {
   return {
@@ -25,7 +27,17 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["file_paths"],
       },
       handler: async (args: { file_paths: string[]; target_bin?: string; suppress_ui?: boolean }) => {
-        const paths = args.file_paths.map((p) => `"${escapeForExtendScript(p)}"`).join(", ");
+        // importFiles with a nonexistent path opens a blocking modal in Premiere
+        // that wedges the CEP bridge (#713): check every path here first and
+        // hand the host native separators.
+        const missing = args.file_paths.map((p) => resolve(p)).filter((p) => !existsSync(p));
+        if (missing.length > 0) {
+          return {
+            success: false as const,
+            error: `File(s) not found: ${missing.join(", ")} — nothing was imported. importFiles with a missing path opens a blocking dialog in Premiere.`,
+          };
+        }
+        const paths = args.file_paths.map((p) => `"${escapeForExtendScript(resolve(p))}"`).join(", ");
         const suppress = args.suppress_ui !== false ? "true" : "false";
         const binLookup = args.target_bin
           ? `var targetBin = __findProjectItem("${escapeForExtendScript(args.target_bin)}");
