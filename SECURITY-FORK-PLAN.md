@@ -414,3 +414,22 @@ interruptor: **`PREMIERE_MCP_SEC_RENDER_GUARD`** (default `1` = activado).
   remaining: ["Opacidad","Movimiento"], undoSteps: 1}` — la misma llamada que
   devolvía el refusal.
 - Tarball SHA `906d2c35d6951109d24e57f5c0398aa4dc66d73a1e27b5b9988f68b347a95ae7`.
+
+## 17. Follow-up #674 (Equilibrio) + re-test controlado #687 — 2026-09-30
+
+- **Agujero cazado en vivo por la fase de audio:** un Balance tocado (QE/UI) crea un
+  componente "Equilibrio" con matchName `Internal Audio Balance`; al ser `Internal *`,
+  el clasificador lo cuenta como built-in confirmado, y su displayName fuera de la
+  tabla disparaba de nuevo el refusal de host localizado — en cualquier clip español
+  donde el usuario hubiera tocado el Balance. **Fix:** "Equilibrio" añadido a la tabla
+  (medido en vivo) + test que verifica remoción con Equilibrio presente y protección
+  por nombre. Regresiones 106/106; suite 233 archivos / 4065 passed.
+- **Re-test controlado QuickTime (#687):** JSON válido con backslashes literales,
+  cliente con timeout 300 s, `PREMIERE_TIMEOUT_MS=180000`, monitoreo del proceso →
+  mismo "Unable to initialize export!" con el host vivo y respondiendo durante todo
+  el intento. La conclusión del issue SE CONSOLIDA (export por scripting roto para
+  H.264 y QuickTime por igual); el crash original queda aislado como efecto de
+  matar el cliente a mitad de render.
+- Config de Codex completada (env: capabilities, tool packs, timeout 120 s).
+- Lección de escaping: la capa de herramienta se come un nivel de backslashes;
+  en heredocs usar `\\`; args JSON largos vía stdin (`mcp-call.js` ahora acepta `-`).

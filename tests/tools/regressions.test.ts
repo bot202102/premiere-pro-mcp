@@ -704,6 +704,19 @@ describe("issue #129 — effect removal uses the targeted QE component remove an
     expect(names(list)).toEqual(["Volumen"]);
   });
 
+  it("classifies a touched Balance (Equilibrio / Internal Audio Balance) as built-in, not as a localized host (live 26.5.2 es-ES)", async () => {
+    const spanishBalance = {
+      Volumen: "Internal Volume Stereo",
+      "Volumen del canal": "Internal Channel Volume Stereo",
+      Equilibrio: "Internal Audio Balance",
+      DeEsser: "AE.ADBE DeEsser",
+    };
+    const list = removalHost(["Volumen", "Volumen del canal", "Equilibrio", "DeEsser"], { trackType: "audio", matchNames: spanishBalance });
+    await expect(advanced.remove_all_effects.handler({ node_id: "clip1" })).resolves.toMatchObject({ success: true, data: { removedEffects: ["DeEsser"] } });
+    expect(names(list)).toEqual(["Volumen", "Volumen del canal", "Equilibrio"]);
+    await expect(clipboard.remove_effect_by_name.handler({ node_id: "clip1", effect_name: "Equilibrio" })).resolves.toMatchObject({ success: false, error: expect.stringContaining("built-in") });
+  });
+
   it("keeps a Spanish graphic's layers (Movimiento del vector, Texto) while removing effects", async () => {
     const graphicEs = { Opacidad: "AE.ADBE Opacity", Movimiento: "AE.ADBE Motion", "Movimiento del vector": "AE.ADBE Graphic Group", Texto: "AE.ADBE Text", Tinte: "AE.ADBE Tint" };
     const list = removalHost(["Opacidad", "Movimiento", "Movimiento del vector", "Texto", "Tinte"], { matchNames: graphicEs });
