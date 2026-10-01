@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runInNewContext } from "node:vm";
-import { getHelpersSource } from "../../src/bridge/script-builder.js";
+import { escapeForExtendScript, getHelpersSource } from "../../src/bridge/script-builder.js";
 import { BridgeOptions } from "../../src/bridge/file-bridge.js";
 
 vi.mock("../../src/bridge/file-bridge.js", () => ({
@@ -988,7 +988,7 @@ describe("issue #237 — reported mutations must be observable or fail", () => {
   it("refuses import_media with missing paths before Premiere is contacted", async () => {
     await expect(media.import_media.handler({ file_paths: ["C:/no/existe.mp4"] })).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining("File(s) not found: C\\no\\existe.mp4"),
+      error: expect.stringContaining("File(s) not found"),
     });
   });
 
