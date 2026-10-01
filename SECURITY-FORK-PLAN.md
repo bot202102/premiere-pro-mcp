@@ -503,3 +503,14 @@ en el fork (7 de 9; los 2 restantes son de diseño y quedan recomendados):
   capa de esquema transversal) y preview-con-nodos-inexistentes (validación host-side).
 
 Suite: 233 archivos / 4067 passed.
+
+## 22. Rework #712 tras review del owner (2026-10-01)
+
+El owner revisó #717 con razón: `ProjectItem.getOutPoint()` es una **marca
+editable**, no la duración física — el guard original rechazaría edits legítimos
+tras una marca de usuario. **Rework:** two-phase con evidencia real — fase 1 lee
+`getMediaPath()` del clip, Node hace ffprobe de la duración, fase 2 embebe el
+bound exacto. Inyectable en tests (sin ffmpeg). Stills (sin duración) quedan sin
+techo — su semántica real. `set_clips_volume` (bulk) suma el lookup localizado
+que el owner señaló en #710. Suite: 233 archivos / 4070 passed.
+Live: trim 39s y slip→6s rechazados nombrando "5.000s (ffprobe)".

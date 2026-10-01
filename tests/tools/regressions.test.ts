@@ -57,7 +57,7 @@ async function scriptFor(tool: { handler: (args: never) => Promise<unknown> }, a
   mockedSendCommand.mockClear();
   await tool.handler(args as never);
   expect(mockedSendCommand).toHaveBeenCalled();
-  return mockedSendCommand.mock.calls[0][0] as string;
+  return mockedSendCommand.mock.calls.at(-1)[0] as string;
 }
 
 /**
@@ -81,6 +81,37 @@ async function executePixelAspectRatioScript(sequence: unknown, ratio = "1.4222"
 beforeEach(() => vi.clearAllMocks());
 
 describe("real-host social sequence regressions", () => {
+
+describe("#712 media-duration evidence (owner review rework)", () => {
+  it("the media bound comes from ffprobe duration, not the editable source Out mark", async () => {
+    vi.mocked(sendCommand).mockResolvedValueOnce({ success: true, data: { mediaPath: "C:/media/clip.mp4" } } as never);
+    const tools = getTimelineTools(bridgeOptions, { probeMediaDurationSeconds: async () => 10 });
+    await tools.trim_clip.handler({ node_id: "clip-1", new_out_seconds: 15 });
+    const script = mockedSendCommand.mock.calls.at(-1)[0] as string;
+    expect(script).toContain("targetOut > 10.000 + tolerance");
+    expect(script).toContain("real media duration of 10.000s (ffprobe)");
+    expect(script).not.toContain("projectItem.getOutPoint()");
+  });
+
+  it("still images (no duration evidence) keep no upper source bound", async () => {
+    vi.mocked(sendCommand).mockResolvedValueOnce({ success: true, data: { mediaPath: "C:/media/still.png" } } as never);
+    const tools = getTimelineTools(bridgeOptions, { probeMediaDurationSeconds: async () => null });
+    await tools.trim_clip.handler({ node_id: "clip-1", new_out_seconds: 15 });
+    const script = mockedSendCommand.mock.calls.at(-1)[0] as string;
+    expect(script).toContain("No media-duration evidence available");
+    expect(script).not.toContain("real media duration of");
+  });
+
+  it("slip_edit carries the same ffprobe-evidence bound", async () => {
+    vi.mocked(sendCommand).mockResolvedValueOnce({ success: true, data: { mediaPath: "C:/media/clip.mp4" } } as never);
+    const tools = getAdvancedTools(bridgeOptions, { probeMediaDurationSeconds: async () => 10 });
+    await tools.slip_edit.handler({ node_id: "clip-1", offset_seconds: 2 });
+    const script = mockedSendCommand.mock.calls.at(-1)[0] as string;
+    expect(script).toContain("past this clip's real media duration of 10.000s (ffprobe)");
+    
+  });
+});
+
   // #691: QE's newSequence silently ignores forward-slash preset paths on
   // Windows, so the handler must hand the host native separators and give a
   // missing file its own precise error.

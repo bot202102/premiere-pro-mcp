@@ -1118,7 +1118,8 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             if (only && !wanted[c]) continue;
             var clip = track.clips[c], set = false;
             for (var i = 0; i < clip.components.numItems; i++) {
-              if (clip.components[i].displayName !== "Volume") continue;
+              var __cmB = String(clip.components[i].matchName || "");
+              if (clip.components[i].displayName !== "Volume" && clip.components[i].displayName !== "Volumen" && __cmB.indexOf("Internal Volume") !== 0) continue;
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
                 var __pn2 = String(clip.components[i].properties[p].displayName);
                   if (__pn2 === "Level" || __pn2 === "Nivel") {
