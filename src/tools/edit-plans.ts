@@ -166,6 +166,10 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
   const capabilities = dependencies.capabilities ?? resolveCapabilities();
   const auditSink = dependencies.auditSink ?? stderrAuditSink;
   const nextId = dependencies.operationIdFactory ?? createOperationId;
+  // SEC FORK (#725 FAM-10): confirmation tokens are single-use per server session.
+  // apply_edit_plan consumes on success; preview_edit_plan re-arms (the only way
+  // back to a consumable token is a fresh preview).
+  const consumedConfirmationTokens = new Set<string>();
   const planParameter = {
     type: "object",
     description:
@@ -203,6 +207,9 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
         const operationId = nextId();
         requireCapability(capabilities, "inspect", operationId);
         const plan = validateEditPlan(args.plan);
+        // SEC FORK (#725 FAM-10): re-previewing re-arms the token, so the only
+        // way back to a consumable confirmation is a fresh preview.
+        consumedConfirmationTokens.delete(confirmationToken(plan));
         return { success: true, data: { operationId, changes: describe(plan), confirmationToken: confirmationToken(plan), applied: false } };
       },
     },
@@ -218,9 +225,15 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
         try {
           requireCapability(capabilities, "edit", operationId);
           const plan = validateEditPlan(args.plan);
-          if (args.confirmation_token !== confirmationToken(plan)) throw new Error("Confirmation token does not match this edit plan; preview it again");
+          const planToken = confirmationToken(plan);
+          // SEC FORK (#725 FAM-10): a confirmation token is single-use — the
+          // server's own guidance says never blindly replay one, so a consumed
+          // token cannot re-apply (including after an undo) without a fresh preview.
+          if (consumedConfirmationTokens.has(planToken)) throw new Error("This confirmation token has already been applied and was consumed; preview the edit again to obtain a fresh token");
+          if (args.confirmation_token !== planToken) throw new Error("Confirmation token does not match this edit plan; preview it again");
           emitAudit(auditSink, { operationId, action: "apply_edit_plan", outcome: "started", details: { operationCount: plan.operations.length } });
           const result = await sendCommand(buildApplyScript(plan), bridgeOptions);
+          if (result.success) consumedConfirmationTokens.add(planToken);
           emitAudit(auditSink, { operationId, action: "apply_edit_plan", outcome: result.success ? "succeeded" : "failed" });
           return result.success ? { ...result, data: { ...(result.data as object), operationId } } : { ...result, error: `${result.error ?? "Edit plan failed"} (operation ${operationId})` };
         } catch (error) {

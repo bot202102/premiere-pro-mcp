@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runInNewContext } from "node:vm";
-import { getHelpersSource } from "../../src/bridge/script-builder.js";
+import { escapeForExtendScript, getHelpersSource } from "../../src/bridge/script-builder.js";
 import { BridgeOptions } from "../../src/bridge/file-bridge.js";
 
 vi.mock("../../src/bridge/file-bridge.js", () => ({
@@ -1374,5 +1374,38 @@ describe("sequence settings setters verify their readback", () => {
     await expect(utility.set_sequence_field_type.handler({ field_type: 7 })).resolves.toMatchObject({ success: false });
     await expect(utility.set_sequence_display_format.handler({})).resolves.toMatchObject({ success: false });
     expect(mockedSendCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe("SEC contract hardening (#725 round 3)", () => {
+  const project725 = getProjectTools(bridgeOptions);
+  const advanced725 = getAdvancedTools(bridgeOptions);
+  const playhead725 = getPlayheadTools(bridgeOptions);
+
+  it("undo requires expected_undo_stack_index (#725 FAM-1)", async () => {
+    await expect(project725.undo.handler({})).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("expected_undo_stack_index is required"),
+    });
+  });
+
+  it("rename_clip refuses empty or whitespace names (#725 FAM-7)", async () => {
+    await expect(advanced725.rename_clip.handler({ node_id: "clip-1", new_name: "   " })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("must not be empty"),
+    });
+  });
+
+  it("set_playhead_position rejects non-finite and negative times (#725 FAM-3)", async () => {
+    await expect(playhead725.set_playhead_position.handler({ time_seconds: -10 })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("non-negative"),
+    });
+  });
+
+  it("set_clip_volume reports applied values, not echoes (#725 FAM-3)", async () => {
+    const script = await scriptFor(getTrackTargetingTools(bridgeOptions).set_clip_volume, { node_id: "clip-1", volume_db: 100 });
+    expect(script).toContain("appliedLevel");
+    expect(script).toContain("clamped");
   });
 });

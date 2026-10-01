@@ -34,6 +34,11 @@ export function getPlayheadTools(bridgeOptions: BridgeOptions) {
         required: ["time_seconds"],
       },
       handler: async (args: { time_seconds: number }) => {
+        // SEC FORK (#725 FAM-3): reject non-finite and negative times instead of
+        // letting the playhead land on a meaningless position.
+        if (!Number.isFinite(args.time_seconds) || args.time_seconds < 0) {
+          return { success: false as const, error: "time_seconds must be a finite, non-negative number of seconds" };
+        }
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
           if (!seq) return __error("No active sequence");

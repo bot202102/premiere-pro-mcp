@@ -1000,12 +1000,18 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
 
           var clip = result.clip;
           var set = false;
+          var appliedLevel = null;
           for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Volume") {
+            var __cm = String(clip.components[i].matchName || "");
+            if (clip.components[i].displayName === "Volume" || clip.components[i].displayName === "Volumen" || __cm.indexOf("Internal Volume") === 0) {
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Level") {
+                var __pn2 = String(clip.components[i].properties[p].displayName);
+                  if (__pn2 === "Level" || __pn2 === "Nivel") {
                   // normalised 0..1, NOT dB - see dbToPremiereLevel()
                   clip.components[i].properties[p].setValue(${level}, true);
+                  // SEC FORK (#725 FAM-3): report what Premiere actually stored,
+                  // not what was requested — setValue clamps silently.
+                  appliedLevel = Number(clip.components[i].properties[p].getValue());
                   set = true;
                   break;
                 }
@@ -1014,7 +1020,9 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             }
           }
           if (!set) return __error("Could not set volume - is this an audio clip?");
-          return __result({ volumeDb: ${args.volume_db}, level: ${level}, clip: clip.name });
+          var appliedDb = appliedLevel > 0 ? (20 * (Math.log(appliedLevel) / Math.LN10) + ${PREMIERE_MAX_LEVEL_DB}) : null;
+          var clamped = appliedLevel !== null && Math.abs(appliedLevel - ${level}) > 0.0001;
+          return __result({ volumeDb: ${args.volume_db}, level: ${level}, appliedLevel: appliedLevel, appliedDb: appliedDb, clamped: clamped, clip: clip.name });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1041,9 +1049,11 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           var clip = result.clip;
           var level = null;
           for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Volume") {
+            var __cm = String(clip.components[i].matchName || "");
+            if (clip.components[i].displayName === "Volume" || clip.components[i].displayName === "Volumen" || __cm.indexOf("Internal Volume") === 0) {
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Level") {
+                var __pn2 = String(clip.components[i].properties[p].displayName);
+                  if (__pn2 === "Level" || __pn2 === "Nivel") {
                   level = clip.components[i].properties[p].getValue();
                   break;
                 }
@@ -1110,7 +1120,8 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             for (var i = 0; i < clip.components.numItems; i++) {
               if (clip.components[i].displayName !== "Volume") continue;
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Level") {
+                var __pn2 = String(clip.components[i].properties[p].displayName);
+                  if (__pn2 === "Level" || __pn2 === "Nivel") {
                   clip.components[i].properties[p].setValue(${level}, true);
                   set = true;
                   break;
@@ -1573,25 +1584,31 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Optional safety guard: the undoStackIndexAfter reported by the undo you want to redo. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if other actions were undone and redone, or new ones recorded, since, the position can match again and redo would re-apply a different action than the one you undid (a new action also clears Premiere's redo history).",
+              "Required safety guard: the undoStackIndexAfter reported by the undo you want to redo. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if other actions were undone and redone, or new ones recorded, since, the position can match again and redo would re-apply a different action than the one you undid (a new action also clears Premiere's redo history).",
           },
         },
+        required: ["expected_undo_stack_index"],
       },
-      handler: async (args: { count?: number; expected_undo_stack_index?: number } = {}) => {
+      handler: async (args: { count?: number; expected_undo_stack_index: number }) => {
         const count = args.count ?? 1;
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
+        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
+        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg !== undefined && (!Number.isInteger(guardArg) || guardArg < 0)) {
-          return { success: false, error: "expected_undo_stack_index must be a non-negative integer" };
+        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo/redo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
         }
-        const guard = guardArg === undefined ? "null" : String(guardArg);
+        const guard = String(guardArg);
         const script = buildToolScript(`
           __undoStart = null;
           var expectedIndex = ${guard};
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
+            if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
+              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("redo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+            }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so redo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }
@@ -1616,25 +1633,31 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Optional safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
+              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
           },
         },
+        required: ["expected_undo_stack_index"],
       },
-      handler: async (args: { count?: number; expected_undo_stack_index?: number }) => {
+      handler: async (args: { count?: number; expected_undo_stack_index: number }) => {
         const count = args.count ?? 1;
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
+        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
+        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg !== undefined && (!Number.isInteger(guardArg) || guardArg < 0)) {
-          return { success: false, error: "expected_undo_stack_index must be a non-negative integer" };
+        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo/redo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
         }
-        const guard = guardArg === undefined ? "null" : String(guardArg);
+        const guard = String(guardArg);
         const script = buildToolScript(`
           __undoStart = null;
           var expectedIndex = ${guard};
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
+            if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
+              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("undo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+            }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so undo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }

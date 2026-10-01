@@ -294,6 +294,17 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
             var newInTicks = parseFloat(beforeIn) + deltaTicks;
             var newOutTicks = parseFloat(beforeOut) + deltaTicks;
             if (newInTicks < 0 || newOutTicks <= newInTicks) return __editFail("The requested slip offset would create an invalid source range.");
+            // Slipping past the media's own end leaves the clip referencing
+            // frames that do not exist (#712): refuse against the project
+            // item's media out point before anything is written.
+            var mediaEndTicks = null;
+            try {
+              var mediaOut = result.clip.projectItem.getOutPoint();
+              if (mediaOut && isFinite(mediaOut.ticks)) mediaEndTicks = parseFloat(mediaOut.ticks);
+            } catch (mediaOutError) {}
+            if (mediaEndTicks !== null && newOutTicks > mediaEndTicks + 1) {
+              return __editFail("The requested slip offset would move the source out point to " + (newOutTicks / TICKS_PER_SECOND) + "s, past this clip's media end of " + (mediaEndTicks / TICKS_PER_SECOND) + "s; slip was not attempted.");
+            }
             if (checkOnly) return __editOk({ checked: true });
             var newIn = new Time();
             newIn.ticks = String(Math.round(newInTicks));
@@ -711,6 +722,11 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "new_name"],
       },
       handler: async (args: { node_id: string; new_name: string }) => {
+        // SEC FORK (#725 FAM-7): Premiere's UI refuses empty clip names; the
+        // scripting path accepted them and left the clip nameless.
+        if (!args.new_name.trim()) {
+          return { success: false as const, error: "new_name must not be empty or whitespace-only" };
+        }
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");
