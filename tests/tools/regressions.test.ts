@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runInNewContext } from "node:vm";
-import { getHelpersSource } from "../../src/bridge/script-builder.js";
+import { escapeForExtendScript, getHelpersSource } from "../../src/bridge/script-builder.js";
 import { BridgeOptions } from "../../src/bridge/file-bridge.js";
 
 vi.mock("../../src/bridge/file-bridge.js", () => ({
@@ -882,6 +882,19 @@ describe("issue #335 — pixel aspect ratio must fail closed on unsupported CEP 
 // https://github.com/leancoderkavy/premiere-pro-mcp/issues/235
 describe("issue #235 — CEP tool calls use the host's documented argument types", () => {
   const utility = getUtilityTools(bridgeOptions);
+  // #710: audio volume tools must recognize localized built-ins (es-ES
+  // Volumen / Internal Volume Stereo, property Nivel) — previously they only
+  // matched English names and failed with "is this an audio clip?".
+  it("set_clip_volume and get_clip_volume recognize localized Volume components", async () => {
+    const setScript = await scriptFor(tracks.set_clip_volume, { node_id: "clip-1", volume_db: -3 });
+    expect(setScript).toContain("Volumen");
+    expect(setScript).toContain("Internal Volume");
+    expect(setScript).toContain("Nivel");
+    const getScript = await scriptFor(tracks.get_clip_volume, { node_id: "clip-1" });
+    expect(getScript).toContain("Volumen");
+    expect(getScript).toContain("Nivel");
+  });
+
   const tracks = getTrackTargetingTools(bridgeOptions);
   const project = getProjectTools(bridgeOptions);
 
