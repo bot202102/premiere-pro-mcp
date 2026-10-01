@@ -652,14 +652,15 @@ function __qeTransitionObject(kind, entry) {
 // Components every clip carries (and a graphic's own layers). They are not
 // effects and are never removed. English names plus es-ES names measured live
 // on Premiere 26.5.2 (#674): video Opacidad / Movimiento / Movimiento del
-// vector / Texto, audio Volumen / Volumen del canal, and Equilibrio — the
-// built-in Balance, which appears on a clip once Balance was touched (QE or
-// UI) with matchName "Internal Audio Balance"; its localized display name must
-// be classified or it alone trips the localized-host refusal. The remaining
-// es-ES entries are the Spanish UI vocabulary for families not yet seen live
-// on a component (Time Remapping, Panner, Shape); adding a name to this table
-// only ever prevents a removal, so vocabulary entries are fail-safe.
-var __BUILT_IN_COMPONENTS = { "Opacity": true, "Motion": true, "Time Remapping": true, "Volume": true, "Channel Volume": true, "Panner": true, "Vector Motion": true, "Text": true, "Shape": true, "Opacidad": true, "Movimiento": true, "Movimiento del vector": true, "Volumen": true, "Volumen del canal": true, "Equilibrio": true, "Tiempo de reconfiguración": true, "Paneo de balance": true, "Texto": true, "Forma": true };
+// vector / Texto, audio Volumen / Volumen del canal, and Balance / Equilibrio —
+// the touched-Balance built-in appears on a clip once Balance was applied (QE
+// or UI) with matchName "Internal Audio Balance" (seen on en-US macOS 25.2.3
+// and es-ES Windows 26.5.2); its localized display name must be classified or
+// it alone trips the localized-host refusal. The remaining es-ES entries are
+// the Spanish UI vocabulary for families not yet seen live on a component
+// (Time Remapping, Panner, Shape); adding a name to this table only ever
+// prevents a removal, so vocabulary entries are fail-safe.
+var __BUILT_IN_COMPONENTS = { "Opacity": true, "Motion": true, "Time Remapping": true, "Volume": true, "Channel Volume": true, "Panner": true, "Vector Motion": true, "Text": true, "Shape": true, "Opacidad": true, "Movimiento": true, "Movimiento del vector": true, "Volumen": true, "Volumen del canal": true, "Balance": true, "Equilibrio": true, "Tiempo de reconfiguración": true, "Paneo de balance": true, "Texto": true, "Forma": true };
 // Match names do not change with the host language. Seen live on Premiere
 // 25.2.3 (#674): video "AE.ADBE Opacity", "AE.ADBE Motion"; graphics
 // "AE.ADBE Graphic Group" (Vector Motion), "AE.ADBE Text"; audio "Internal

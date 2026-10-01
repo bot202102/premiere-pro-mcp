@@ -717,6 +717,23 @@ describe("issue #129 — effect removal uses the targeted QE component remove an
     await expect(clipboard.remove_effect_by_name.handler({ node_id: "clip1", effect_name: "Equilibrio" })).resolves.toMatchObject({ success: false, error: expect.stringContaining("built-in") });
   });
 
+  it("classifies an English touched Balance as built-in too (live 25.2.3 en-US macOS data)", async () => {
+    // Display names and match names reported from a Premiere 25.2.3 en-US macOS
+    // host (#674): a stereo clip with Balance applied refused removal before the
+    // English name joined the table. DeEsser's real match name on that host is a
+    // GUID, encoded here to keep the fake honest.
+    const englishBalance = {
+      Volume: "Internal Volume Stereo",
+      "Channel Volume": "Internal Channel Volume Stereo",
+      Balance: "Internal Audio Balance",
+      DeEsser: "ffbe710f-cd69-4139-ad26-65603616d9d4",
+    };
+    const list = removalHost(["Volume", "Channel Volume", "Balance", "DeEsser"], { trackType: "audio", matchNames: englishBalance });
+    await expect(advanced.remove_all_effects.handler({ node_id: "clip1" })).resolves.toMatchObject({ success: true, data: { removedEffects: ["DeEsser"] } });
+    expect(names(list)).toEqual(["Volume", "Channel Volume", "Balance"]);
+    await expect(clipboard.remove_effect_by_name.handler({ node_id: "clip1", effect_name: "Balance" })).resolves.toMatchObject({ success: false, error: expect.stringContaining("built-in") });
+  });
+
   it("keeps a Spanish graphic's layers (Movimiento del vector, Texto) while removing effects", async () => {
     const graphicEs = { Opacidad: "AE.ADBE Opacity", Movimiento: "AE.ADBE Motion", "Movimiento del vector": "AE.ADBE Graphic Group", Texto: "AE.ADBE Text", Tinte: "AE.ADBE Tint" };
     const list = removalHost(["Opacidad", "Movimiento", "Movimiento del vector", "Texto", "Tinte"], { matchNames: graphicEs });
