@@ -992,6 +992,17 @@ describe("issue #237 — reported mutations must be observable or fail", () => {
     });
   });
 
+  it("refuses an empty path array and reports folders honestly (#725 FAM-5)", async () => {
+    await expect(media.import_media.handler({ file_paths: [] })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining("at least one non-empty path"),
+    });
+    const dir = join(process.cwd());
+    const dirForward = dir.split(sep).join("/");
+    const script = await scriptFor(media.import_media, { file_paths: [dirForward] });
+    expect(script).toContain("importedFolders");
+  });
+
   it("resolves forward-slash import paths to native separators before embedding them", async () => {
     const forward = join(process.cwd(), "package.json").split(sep).join("/");
     const script = await scriptFor(media.import_media, { file_paths: [forward] });

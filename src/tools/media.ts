@@ -1,6 +1,6 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 export function getMediaTools(bridgeOptions: BridgeOptions) {
@@ -27,17 +27,31 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["file_paths"],
       },
       handler: async (args: { file_paths: string[]; target_bin?: string; suppress_ui?: boolean }) => {
+        // SEC FORK (#725 FAM-5): an empty array used to fall through to a vague
+        // "Import failed"; require at least one real path.
+        if (!Array.isArray(args.file_paths) || args.file_paths.length === 0 || args.file_paths.some((p) => !p || !p.trim())) {
+          return { success: false as const, error: "file_paths must contain at least one non-empty path" };
+        }
         // importFiles with a nonexistent path opens a blocking modal in Premiere
         // that wedges the CEP bridge (#713): check every path here first and
         // hand the host native separators.
-        const missing = args.file_paths.map((p) => resolve(p)).filter((p) => !existsSync(p));
+        const resolvedPaths = args.file_paths.map((p) => resolve(p));
+        const missing: string[] = [];
+        const directories: string[] = [];
+        for (const p of resolvedPaths) {
+          if (!existsSync(p)) missing.push(p);
+          else if (statSync(p).isDirectory()) directories.push(p);
+        }
         if (missing.length > 0) {
           return {
             success: false as const,
             error: `File(s) not found: ${missing.join(", ")} — nothing was imported. importFiles with a missing path opens a blocking dialog in Premiere.`,
           };
         }
-        const paths = args.file_paths.map((p) => `"${escapeForExtendScript(resolve(p))}"`).join(", ");
+        const paths = resolvedPaths.map((p) => `"${escapeForExtendScript(p)}"`).join(", ");
+        const directoryNote = directories.length > 0
+          ? `, importedFolders: ${JSON.stringify(directories)}, note: "Folders import as bins; files lists only real files"`
+          : "";
         const suppress = args.suppress_ui !== false ? "true" : "false";
         const binLookup = args.target_bin
           ? `var targetBin = __findProjectItem("${escapeForExtendScript(args.target_bin)}");
@@ -49,7 +63,7 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
           var filePaths = [${paths}];
           var importSuccess = app.project.importFiles(filePaths, ${suppress}, targetBin, false);
           if (!importSuccess) return __error("Import failed");
-          return __result({ imported: filePaths.length, files: filePaths });
+          return __result({ imported: filePaths.length, files: filePaths${directoryNote} });
         `);
         return sendCommand(script, bridgeOptions);
       },
