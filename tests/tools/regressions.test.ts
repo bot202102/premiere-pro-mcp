@@ -1296,7 +1296,8 @@ describe("issue #326 — sequence creation requires project-collection readback"
 
   it("does not report a QE-active sequence as created unless it is discoverable", async () => {
     const script = await scriptFor(sequence.create_sequence, {
-      name: "Verified Sequence", preset_path: "/tmp/sequence.sqpreset",
+      // an existing file: #714 gives a missing preset its own precise error before any script is built
+      name: "Verified Sequence", preset_path: join(process.cwd(), "package.json"),
     });
     expect(script).toContain("var beforeSequenceIds = {}");
     expect(script).toContain("var sequenceId = String(seq.sequenceID)");

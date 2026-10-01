@@ -460,3 +460,22 @@ Node + `existsSync` con error propio ("Preset file not found: …") en vez del g
 Tests: normalización (script contiene el path nativo) + missing-file preciso.
 Suite: 233 archivos / 4067 passed. **Live:** la llamada con `C:/Program Files/…`
 del issue ahora crea la secuencia (`created: true, name: SlashTest`).
+
+## 20. Fixes del stress-test (#710–#714) — 2026-10-01
+
+Stress-test por agente nuevo (13 familias, ~60 calls, log en
+`C:\Users\rpach\Videos\stress-test\hallazgos.md`): 5 bugs nuevos, todos arreglados
+y verificados en vivo aquí:
+
+| Issue | Defecto | Fix | Live |
+|---|---|---|---|
+| #713 | `import_media` con path inexistente abre modal y wedged el puente | existsSync + error preciso por archivo | fallo instantáneo, sin colgar |
+| #710 | Tools de volumen buscan "Volume"/"Level" ingleses | lookup por matchName `Internal Volume*` + displayName dual + propiedad `Level\|Nivel` (4 lookups en audio.ts + track-targeting.ts) | set/get -3 dB verificado |
+| #711 | `add_to_render_queue` falla con forward slashes | resolve() de ambos paths + missing-preset preciso | la llamada exacta del stress-test rinde 24 MB |
+| #714 | `create_sequence` falla con preset válido forward-slash | mismo patrón #691 (resolve + existsSync) | preset HD 1080p del stress-test crea |
+| #712 | trim/slip aceptan fuente fuera del medio | guard de media-end vía projectItem.getOutPoint() en ambos | trim 39s y slip→12s rechazados nombrando el límite (10s) |
+
+Pendiente documentado en #712: el socio enlazado no se editó en el trim original
+(`linkedPartnersEdited: []` con include_linked:true) — defecto separado que requiere
+decisión de semántica; los bounds ya no permiten llegar a ese estado corrupto.
+Suite: 233 archivos / 4067 passed.
