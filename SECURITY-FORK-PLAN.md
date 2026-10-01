@@ -390,3 +390,27 @@ interruptor: **`PREMIERE_MCP_SEC_RENDER_GUARD`** (default `1` = activado).
 - `PREMIERE_MCP_SEC_RENDER_GUARD=0` lo desactiva (modo upstream).
 - Tests: 5 nuevos (`tests/security/render-guard.test.ts`); suite completa
   **233 archivos / 4060 passed** en modo permisivo.
+
+## 16. SEC-FIX: eliminación de efectos en hosts es-ES (#674) — 2026-09-30
+
+**Fix implementado y probado EN VIVO contra el caso de reproducción real.**
+
+- **Causa raíz:** `__BUILT_IN_COMPONENTS` (tabla de display names de built-ins en
+  `script-builder.ts`) solo contenía inglés; al ver `AE.ADBE Motion` con displayName
+  "Movimiento", `__componentClassificationProblem` concluía "host localizado" y
+  rechazaba TODA eliminación.
+- **Fix:** tabla ampliada con los nombres es-ES **medidos en vivo** (Opacidad,
+  Movimiento, Movimiento del vector, Volumen, Volumen del canal) + vocabulario UI
+  español de las familias no vistas (Tiempo de reconfiguración, Paneo de balance,
+  Texto, Forma). Dirección estrictamente fail-safe: añadir un nombre solo puede
+  PREVENIR una eliminación, nunca habilitar un borrado peligroso. Sin flag SEC
+  necesario: es datos de evidencia, igual que la tabla inglesa de upstream.
+- **Tests:** 4 nuevos en `tests/tools/regressions.test.ts` (es-ES video, es-ES mono
+  audio, gráfico es-ES con Movimiento del vector/Texto, e italiano SIGUE rechazando —
+  el guardia por-locale se preserva). Regresiones 105/105; suite completa
+  **233 archivos / 4064 passed**.
+- **Prueba en vivo (Premiere 26.5.2 es-ES, el repro real):**
+  `remove_effect_by_name("Desenfoque gaussiano")` → `{removed: 1, verified: true,
+  remaining: ["Opacidad","Movimiento"], undoSteps: 1}` — la misma llamada que
+  devolvía el refusal.
+- Tarball SHA `906d2c35d6951109d24e57f5c0398aa4dc66d73a1e27b5b9988f68b347a95ae7`.
