@@ -722,6 +722,11 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "new_name"],
       },
       handler: async (args: { node_id: string; new_name: string }) => {
+        // SEC FORK (#725 FAM-7): Premiere's UI refuses empty clip names; the
+        // scripting path accepted them and left the clip nameless.
+        if (!args.new_name.trim()) {
+          return { success: false as const, error: "new_name must not be empty or whitespace-only" };
+        }
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");

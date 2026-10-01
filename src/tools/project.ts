@@ -174,7 +174,7 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Optional safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
+              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
           },
         },
       },
@@ -183,16 +183,21 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
+        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
+        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg !== undefined && (!Number.isInteger(guardArg) || guardArg < 0)) {
-          return { success: false, error: "expected_undo_stack_index must be a non-negative integer" };
+        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
         }
-        const guard = guardArg === undefined ? "null" : String(guardArg);
+        const guard = String(guardArg);
         const script = buildToolScript(`
           __undoStart = null;
           var expectedIndex = ${guard};
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
+            if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
+              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("undo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+            }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so undo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }

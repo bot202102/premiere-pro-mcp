@@ -479,3 +479,27 @@ Pendiente documentado en #712: el socio enlazado no se editó en el trim origina
 (`linkedPartnersEdited: []` con include_linked:true) — defecto separado que requiere
 decisión de semántica; los bounds ya no permiten llegar a ese estado corrupto.
 Suite: 233 archivos / 4067 passed.
+
+## 21. Ronda 3 del stress-test: endurecimiento de contrato (#725) — 2026-10-01
+
+Matriz de 10 familias × 72 sondas del agente (familias-errores.md): 63 fallos
+honestos, 9 hallazgos de contrato → consolidados upstream en #725. Arreglados
+en el fork (7 de 9; los 2 restantes son de diseño y quedan recomendados):
+
+- **FAM-1**: `expected_undo_stack_index` ahora REQUERIDO en undo/redo/multiple_undo
+  (3 handlers; sin él, no se puede probar qué acción se revierte). Los hosts sin
+  undoStackIndex tienen rama de error propia. Tests upstream actualizados con los
+  índices de sus propios fakes (+ rama de no-index y umbral del fake de lecturas).
+- **FAM-10**: tokens de `apply_edit_plan` de un solo uso por sesión de servidor:
+  consumidos al aplicar con éxito; `preview_edit_plan` re-arma (única vía de vuelta).
+  Alineado con la regla propia del repo: "never blindly replay a confirmation token".
+- **FAM-3a**: `set_playhead_position` rechaza no-finito/negativo.
+- **FAM-3b**: `set_clip_volume` lee de vuelta y reporta `appliedLevel/appliedDb/clamped`
+  (el receipt ya no ecoa lo pedido cuando Premiere clampea).
+- **FAM-5a**: `import_media` rechaza array vacío con mensaje propio.
+- **FAM-5b**: importar un directorio reporta `importedFolders` (el campo `files` ya no miente).
+- **FAM-7**: `rename_clip` rechaza nombres vacíos/solo-blancos.
+- Recomendados upstream (sin fix local): FAM-6 (enums en errores de validación,
+  capa de esquema transversal) y preview-con-nodos-inexistentes (validación host-side).
+
+Suite: 233 archivos / 4067 passed.
