@@ -144,6 +144,11 @@ export function getTimelineTools(bridgeOptions: BridgeOptions) {
             startSeconds: ${startSeconds},
             insertedTrackItems: outcome.data.insertedTrackItems
           };
+          if (outcome.data.targetRazored) {
+            // SEC FORK (#730): the insert point fell inside a clip; it was
+            // razor-split first and the tail pushes right like the UI.
+            payload.targetSplitPushedRight = true;
+          }
           if (outcome.data.warning) payload.warning = outcome.data.warning;
           return __result(payload);
         `);

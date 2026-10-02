@@ -1841,6 +1841,68 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     }
   }
 
+  // SEC FORK (#730): Premiere's Sequence.insertClip, called at a point that
+  // falls INSIDE an existing clip on a target track, splits that clip but
+  // moves the trimmed tail to the END of the sequence instead of right after
+  // the insert (live repro, issue #730). Razor the target tracks' straddlers
+  // first so insertClip pushes the separate tail right, exactly like the UI.
+  var targetStraddlers = [];
+  var targetRazored = false;
+  (function () {
+    var tt = [{ type: "video", track: videoTrack, index: vTrackIndex }, { type: "audio", track: audioTrack, index: aTrackIndex }];
+    for (var ti = 0; ti < tt.length; ti++) {
+      var trk = tt[ti].track;
+      if (!trk) continue;
+      for (var ci = 0; ci < trk.clips.numItems; ci++) {
+        var cc = trk.clips[ci];
+        var ccs = parseFloat(cc.start.ticks);
+        var cce = parseFloat(cc.end.ticks);
+        if (ccs < insertTicks - tol && cce > insertTicks + tol) {
+          targetStraddlers.push({ type: tt[ti].type, index: tt[ti].index, track: trk });
+        }
+      }
+    }
+  })();
+  if (targetStraddlers.length) {
+    if (typeof app === "undefined" || typeof app.enableQE !== "function") {
+      return { ok: false, error: "Insert refused; nothing was changed. The insert point falls inside an existing clip on a target track, and without QE the insertClip tail-teleport quirk (#730) cannot be avoided. Razor the target track at the insert point first." };
+    }
+    try { app.enableQE(); } catch (eQE730) {}
+    var qeSeq730 = null;
+    try { qeSeq730 = qe.project.getActiveSequence(); } catch (eQe730) {}
+    if (!qeSeq730) {
+      return { ok: false, error: "Insert refused; nothing was changed. The insert point falls inside an existing clip on a target track and QE is unavailable (#730 tail-teleport quirk). Razor the target track at the insert point first." };
+    }
+    var razorTime730 = null;
+    try { razorTime730 = __qeTimecodeForTicks(seq, insertTicks); } catch (eTc730) {}
+    if (!razorTime730 || !razorTime730.timecode) {
+      return { ok: false, error: "Insert refused; nothing was changed. Could not format a QE razor timecode to avoid the #730 tail-teleport quirk." };
+    }
+    for (var ts730 = 0; ts730 < targetStraddlers.length; ts730++) {
+      var straddler730 = targetStraddlers[ts730];
+      var qeTrack730 = null;
+      try {
+        qeTrack730 = straddler730.type === "video" ? qeSeq730.getVideoTrackAt(straddler730.index) : qeSeq730.getAudioTrackAt(straddler730.index);
+      } catch (eQeTrack730) {}
+      if (!qeTrack730 || typeof qeTrack730.razor !== "function") {
+        return { ok: false, error: "Insert refused; nothing was changed. The insert point falls inside an existing clip on " + straddler730.type + " track " + straddler730.index + " and QE razor is unavailable (#730 tail-teleport quirk). Razor that track at the insert point first." };
+      }
+      qeTrack730.razor(razorTime730.timecode);
+      targetRazored = true;
+    }
+    var stillSpanning730 = false;
+    for (var tsv730 = 0; tsv730 < targetStraddlers.length; tsv730++) {
+      var trkStill = targetStraddlers[tsv730].track;
+      for (var cvStill = 0; cvStill < trkStill.clips.numItems; cvStill++) {
+        var ccStill = trkStill.clips[cvStill];
+        if (parseFloat(ccStill.start.ticks) < insertTicks - tol && parseFloat(ccStill.end.ticks) > insertTicks + tol) stillSpanning730 = true;
+      }
+    }
+    if (stillSpanning730) {
+      return { ok: false, error: "QE razor did not split the target-track clip spanning the insert point; the timeline is partially changed (the razor was applied to avoid the #730 tail-teleport quirk). Inspect the sequence and undo if needed." };
+    }
+  }
+
   var beforeVideoIds = {};
   var beforeAudioIds = {};
   var i;
@@ -1863,6 +1925,21 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
   var afterRazorNote = needRazor
     ? " after sync-locked tracks were razored at the insert point, so the timeline is partially changed"
     : "";
+
+  // SEC FORK (#730): capture the pre-insert target-track end so a surviving
+  // tail-teleport (a clip starting beyond everything that existed before the
+  // insert) can be detected and refused instead of silently verified.
+  var prevTargetEnd = 0;
+  (function () {
+    var ttEnd = [videoTrack, audioTrack];
+    for (var te = 0; te < ttEnd.length; te++) {
+      if (!ttEnd[te]) continue;
+      for (var ce2 = 0; ce2 < ttEnd[te].clips.numItems; ce2++) {
+        var cEnd = parseFloat(ttEnd[te].clips[ce2].end.ticks);
+        if (cEnd > prevTargetEnd) prevTargetEnd = cEnd;
+      }
+    }
+  })();
 
   try {
     seq.insertClip(item, String(timeTicks), vTrackIndex, aTrackIndex);
@@ -1958,6 +2035,22 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     return { ok: false, error: "The clip was inserted on the named tracks but sync-locked tracks were not rippled cleanly, so the timeline is now partially desynced and needs checking. " + failures.concat(verifyProblems).join("; ") + "." };
   }
 
+  // SEC FORK (#730): fail-closed detector — a clip starting beyond everything
+  // that existed before the insert is the insertClip tail-teleport signature.
+  var teleported730 = [];
+  var ttDet = [videoTrack, audioTrack];
+  for (var td = 0; td < ttDet.length; td++) {
+    if (!ttDet[td]) continue;
+    for (var cd = 0; cd < ttDet[td].clips.numItems; cd++) {
+      var cDet = ttDet[td].clips[cd];
+      var csDet = parseFloat(cDet.start.ticks);
+      if (csDet > prevTargetEnd + tol) teleported730.push(ttDet[td].name + " " + cd + " @ " + __ticksToSeconds(csDet) + "s");
+    }
+  }
+  if (teleported730.length) {
+    return { ok: false, error: "Premiere moved a split tail to the end of the sequence (insertClip tail-teleport quirk, #730) despite the pre-razor; the timeline is partially changed: " + teleported730.join("; ") + ". Undo this insert and razor the target track at the insert point before retrying." };
+  }
+
   var tracksAffected = [];
   for (pi = 0; pi < parts.length; pi++) tracksAffected.push(parts[pi].type + " " + parts[pi].index);
 
@@ -1974,6 +2067,7 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     clipsShifted: moved,
     tracksAffected: tracksAffected,
     scope: targetOnly ? "target_tracks" : "sync_locked",
+    targetRazored: targetRazored,
     insertedTrackItems: insertedClips.length
   };
   if (targetOnly) {
