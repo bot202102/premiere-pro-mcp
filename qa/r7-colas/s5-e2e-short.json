@@ -1,0 +1,15 @@
+[
+  {"nota": "R7-S5 — E2E short completo: 720x1280@24, montaje nativo, color+KB, captions/título, render CEP, verificación ffprobe+visual."},
+  {"wait_ms": 8000},
+  {"tool": "create_sequence_from_preset", "args": {"name": "R7-Short", "preset_path": "C:/Users/rpach/Videos/stress4/presets/vertical_720x1280_24.epr"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-01-seq.json", "nota": "usar el preset de R1 si existe en stress4; alternativamente create_empty_sequence_uxp + manage_sequence_settings_uxp 720x1280@24"},
+  {"tool": "edit_timeline_uxp", "args": {"action": "insert", "project_item_id": "PEGAR-GUID-croma", "time_seconds": 0, "video_track_index": 0, "audio_track_index": 0}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-02-insert1.json"},
+  {"tool": "edit_timeline_uxp", "args": {"action": "insert", "project_item_id": "PEGAR-GUID-voz", "time_seconds": 3, "video_track_index": 0, "audio_track_index": 0}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-03-insert2.json", "nota": "insert DENTRO/encabeza; verificar layout en 04"},
+  {"tool": "inspect_sequence_structure_uxp", "args": {"mediaType": "all"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-04-estructura.json"},
+  {"nota": "color: reusar la sonda S1 (Ultra Key ya copiado) o set_color_value; keyframes Ken Burns: pasos S2 sobre el clip 1"},
+  {"tool": "add_text_overlay", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-05-texto.json", "nota": "ajustar args al schema (texto corto vertical-safe)"},
+  {"tool": "validate_project_for_export", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-06-validate.json"},
+  {"tool": "add_to_render_queue", "args": {"output_path": "C:/Users/rpach/Videos/stress4/runs/r7-short-final.mp4", "preset_path": "PEGAR-epr-720x1280"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-07-render.json", "nota": "el fork auto-arranca el batch; start_batch:false solo si quieres encolar sin procesar"},
+  {"wait_ms": 60000, "nota": "espera de render; sondear el archivo con ffprobe después"},
+  {"tool": "get_render_queue_status", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-08-queue-status.json"},
+  {"tool": "save_project_uxp", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s5-99-save.json", "nota": "ffprobe final: h264, 720x1280, duración esperada; extraer 2 frames y mirarlos"}
+]

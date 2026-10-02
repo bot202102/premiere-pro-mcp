@@ -1,0 +1,14 @@
+[
+  {"nota": "R7-S1 — COLOR/CROMA productivo. Ultra Key nativo + PSNR + copia de efectos."},
+  {"wait_ms": 8000},
+  {"tool": "get_uxp_state", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-00-state.json"},
+  {"tool": "import_project_media_uxp", "args": {"action": "files", "paths": ["C:/Users/rpach/Videos/stress4/media-r7/croma_r7.mp4", "C:/Users/rpach/Videos/stress4/media-r7/musica_beats_r7.wav", "C:/Users/rpach/Videos/stress4/media-r7/voz_es_r7.wav"], "confirm_non_undoable": true}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-01-import.json", "nota": "ingest NATIVO de los 3 fixtures; anotar project_item_ids del receipt"},
+  {"tool": "edit_timeline_uxp", "args": {"action": "insert", "project_item_id": "PEGAR-GUID-croma", "time_seconds": 0, "video_track_index": 0, "audio_track_index": 0}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-02-insert-croma.json"},
+  {"tool": "manage_clip_effects_uxp", "args": {"action": "add", "media_type": "video", "track_index": 0, "clip_index": 0, "effect_id": "AE.ADBE Ultra Key", "expected_effect_id": "AE.ADBE Ultra Key"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-03-ultrakey-add.json"},
+  {"tool": "capture_frame", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-04-frame-sin-key.json", "nota": "baseline del renderer vivo (playhead sobre el clip croma)"},
+  {"tool": "automate_effect_parameters_uxp", "args": {"action": "inspect", "media_type": "video", "track_index": 0, "clip_index": 0, "component_index": "PEGAR-indice-UltraKey", "param_index": 0}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-05-uk-p0.json", "nota": "mapear params de Ultra Key (key color / similarity / blend); probar inspect_color_value si alguno es color"},
+  {"tool": "capture_frame", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-06-frame-post-key.json", "nota": "tras tocar el key color si fue posible; PSNR baseline-vs-post"},
+  {"tool": "copy_effects_between_clips", "args": {"source_node_id": "PEGAR-nodeId-clip0", "target_node_id": "PEGAR-nodeId-clip1"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-07-copy-efectos.json", "nota": "requiere 2 clips en V1: insertar 2º segmento del croma si falta"},
+  {"tool": "manage_clip_effects_uxp", "args": {"action": "inspect", "media_type": "video", "track_index": 0, "clip_index": 1}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-08-clip1-inspect.json", "nota": "verificar que el Ultra Key copió"},
+  {"tool": "save_project_uxp", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s1-99-save.json"}
+]
