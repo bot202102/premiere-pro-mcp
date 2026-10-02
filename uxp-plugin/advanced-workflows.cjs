@@ -1018,7 +1018,17 @@
     async function pointParameterSnapshot(context) {
       const projectId = guidString(context.project && context.project.guid), sequenceId = guidString(context.sequence && context.sequence.guid);
       if (!projectId || !sequenceId) throw commandError("UXP_INVALID_HOST_STATE", "Premiere did not provide stable project and sequence identities for the PointF parameter");
-      const point = pointValue(keyframeValue(await context.param.getStartValue()), "Premiere parameter start value");
+      const raw = keyframeValue(await context.param.getStartValue());
+      // Premiere's UXP API returns point values as [x, y] arrays (e.g. Motion
+      // Position reads back [0.5, 0.5]); the tool contract is {x, y}. Normalize
+      // both shapes here so inspect/set_point_value work on real point
+      // parameters, and fail with a specific message on scalar parameters
+      // (previously assertObject surfaced the misleading "args must be an object").
+      const normalized = Array.isArray(raw) && raw.length === 2 && raw.every((n) => typeof n === "number") ? { x: raw[0], y: raw[1] } : raw;
+      if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
+        throw commandError("UXP_PARAMETER_NOT_POINT", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is a scalar parameter, not a point (PointF) parameter. Use action 'inspect'/'set_value' for scalar parameters; 'inspect_point_value' only applies to point parameters such as position.");
+      }
+      const point = pointValue(normalized, "Premiere parameter start value");
       return {
         projectId, sequenceId, mediaType: context.mediaType, trackIndex: context.trackIndex, clipIndex: context.clipIndex,
         componentIndex: context.componentIndex, componentId: context.componentId, paramIndex: context.paramIndex,
@@ -1200,7 +1210,11 @@
     async function colorParameterSnapshot(context) {
       const projectId = guidString(context.project && context.project.guid), sequenceId = guidString(context.sequence && context.sequence.guid);
       if (!projectId || !sequenceId) throw commandError("UXP_INVALID_HOST_STATE", "Premiere did not provide stable project and sequence identities for the Color parameter");
-      const color = colorValue(keyframeValue(await context.param.getStartValue()), "Premiere parameter start value");
+      const raw = keyframeValue(await context.param.getStartValue());
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw commandError("UXP_PARAMETER_NOT_COLOR", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is not a color parameter (current value is scalar). Use action 'inspect'/'set_value' for scalar parameters; 'inspect_color_value' only applies to color parameters.");
+      }
+      const color = colorValue(raw, "Premiere parameter start value");
       return {
         projectId, sequenceId, mediaType: context.mediaType, trackIndex: context.trackIndex, clipIndex: context.clipIndex,
         componentIndex: context.componentIndex, componentId: context.componentId, paramIndex: context.paramIndex,
