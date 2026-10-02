@@ -1,1 +1,1 @@
-9beaf484fc228883bdee2a49026f886e8ba7f3157fa04145ab2ee612913a22ec *premiere-pro-mcp-1.18.6.tgz
+591eb1ca88d678ca0640b64ab2fc3a48d80c34c320b247debbfdd11db81af50f *premiere-pro-mcp-1.18.6.tgz

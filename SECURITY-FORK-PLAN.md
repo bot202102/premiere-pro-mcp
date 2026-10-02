@@ -528,3 +528,19 @@ and was consumed". Además **#729 preflight**: relink_media e import_folder
 rechazan paths inexistentes antes de abrir diálogos bloqueantes (el hang de
 ruta válida bloqueada por Premiere queda documentado Adobe-side en #729).
 Suite: 233 archivos / 4070 passed.
+
+## 24. SEC-FIX #730 — tail-teleport de insertClip (2026-10-02)
+
+`add_to_timeline` con el insert DENTRO de un clip existente: Premiere's
+`Sequence.insertClip` parte el clip pero **mueve la cola al final del timeline**
+en vez de empujarla tras el insert (live repro del agente: 10 colas de 2.2s en
+22–44s, música +44s), y el receipt decía verified:true.
+
+**Fix (en `__insertClipHonoringSyncLock`):** pre-razor QE de los straddlers de
+las pistas DESTINO (el motor ya razor-eaba solo las sync-locked otras), con
+verificación de split y refusal fail-closed si QE no está disponible; detector
+post-insert de colas teleportadas (fail-closed); flag `targetSplitPushedRight`
+en el receipt. **Live verificado**: insert B @3 dentro de A (0–10) → V1 =
+A' 0–3, B 3–7, cola A 7–14 — sin teleport, exactamente la semántica de la UI.
+Suite: 233 archivos / 4070 passed (incluye los tests #562 upstream con el
+pre-razor integrado).
