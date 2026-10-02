@@ -587,3 +587,32 @@ monitorear y runbook de sync: **`DIVERGENCIAS-Y-MONITOREO.md`** (raíz del repo)
 Los sitios de código llevan comentarios `[FORK-DIVERGENCE]` que referencia este
 contrato; ningún merge de upstream debe eliminarlos sin resolver su columna
 "Disposición" primero.
+
+## 27. SEC 10 — Auto-pairing UXP + puerto dinámico (2026-10-02)
+
+Problema: publicar el plugin exigía pasos manuales (pegar URL/token en el panel) y el
+puerto fijo 7777 colisiona cuando hay dos servers (p.ej. Codex vivo + sesión propia).
+
+Solución (cero envs para el usuario, cero pasos en el panel):
+
+- **Puerto dinámico** (`src/index.ts`): default 7777; si está ocupado y el usuario no
+  fijó `PREMIERE_UXP_PORT`, el bridge re-intenta con puerto 0 (asignado por el OS).
+  Con puerto explícito, un conflicto sigue siendo error honesto (CEP-only).
+- **Fichero de emparejamiento** (`src/bridge/uxp-pairing.ts`, nuevo): tras bind, el
+  server escribe `uxp-pairing.json` (schema `premiere-mcp.uxp-pairing.v1`: url, token,
+  pid, issuedAt) en TODA carpeta de datos del plugin existente
+  (`%APPDATA%\Adobe\UXP\PluginsStorage\PPRO\<major>\{External,Internal}\com.ppmcp.premiere.uxp[\PluginData]`)
+  + el temp dir del bridge. En shutdown borra solo los ficheros con SU pid (un segundo
+  server vivo conserva el suyo: last-writer-wins documentado).
+- **Lector en el panel** (`uxp-plugin/index.cjs`, marcado FORK): al abrir, el panel
+  prefiere el fichero de emparejamiento → sesión persistida (localStorage) → manual.
+  Si el pairing apuntaba a un server muerto, al primer fallo de conexión cae a la
+  sesión persistida en vez de reintentar eternamente.
+- **Flag**: `PREMIERE_MCP_SEC_AUTO_PAIRING` (default ON; `0` restaura el flujo manual).
+- Superficie de exposición: el token queda en disco en el perfil del usuario — misma
+  exposición que config.toml del cliente, que ya lo contiene.
+
+Tests: `tests/uxp-pairing.test.ts` (4) + 3 contratos nuevos de puerto en
+`tests/entrypoints-unit.test.ts` (fallback dinámico escribe pairing; doble-fallo y
+puerto-explícito-ocupado → CEP-only). Suite 4077/0. Publicación: QUICKSTART.md +
+ccx determinista con SHA256.

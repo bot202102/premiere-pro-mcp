@@ -27,6 +27,8 @@ sin equivalente upstream).
 | Warning `undoRecordable:false` en markers | `src/tools/markers.ts` (~:100 y receipt add/update) | Los markers jamás movieron la pila QE (#733); el receipt avisa en vez de mentir | #736 reporta lo mismo upstream | **PREFER-UPSTREAM** si el receipt es equivalente |
 | Bounds físicos vía ffprobe | `src/tools/media-evidence.ts` (+ consumidores timeline.ts, advanced.ts) | `getOutPoint()` es marca editable, no duración física (#712) | #760 adoptó el mismo enfoque | **PREFER-UPSTREAM** si cubre trim/slip/stills igual |
 | 10 flags `PREMIERE_MCP_SEC_*` | tabla en `SECURITY-FORK-PLAN.md` §2 | Defaults endurecidos: sin auto-update, sin telemetría, sin HTTP, PlayerDebugMode opt-in, render breaker, perfil reducido | — (sin equivalente) | **SEC — permanente** |
+| **SEC 10 auto-pairing + puerto dinámico** | `src/bridge/uxp-pairing.ts` + wiring en `src/index.ts` + lector en `uxp-plugin/index.cjs` | Publicación cero-fricción: sin pegar token a mano; puerto 7777→dinámico si ocupado | — (upstream pide env + pegado manual; ver su README de uxp-plugin) | **SEC — permanente** (si upstream implementa algo equivalente, PREFER-UPSTREAM) |
+| Tests autocontenidos (entrypoints/telemetry sin env de shell) | `tests/entrypoints-unit.test.ts`, `tests/telemetry*.test.ts` | `npm test` debe pasar sin provisionar flags SEC en la shell | — | **SEC — permanente** |
 | pnpm supply-chain (minimumReleaseAge 7d, no-build-scripts, overrides) | `pnpm-workspace.yaml` | Cadena de suministro | — | **SEC — permanente** |
 | .npmignore per-file + tarball pin SHA256 | `.npmignore`, `SHA256SUMS.txt` | El .debug CEP no puede salir jamás en el paquete | — | **SEC — permanente** |
 

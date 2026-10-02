@@ -61,8 +61,40 @@ function restoreBridgeSession() {
     const urlEl = document.getElementById("bridge-url");
     const tokenEl = document.getElementById("bridge-token");
     if (urlEl && typeof value.url === "string" && value.url) urlEl.value = value.url;
-    if (tokenEl && typeof value.token === "string") tokenEl.value = value.token;
+    if (tokenEl && typeof value.token === "string" && value.token) tokenEl.value = value.token;
   } catch (_) {}
+}
+
+// SEC FORK (SEC 10): the MCP server writes a pairing file (bridge URL + token)
+// into well-known UXP plugin data locations so end users never paste secrets by
+// hand. This reader prefers the pairing file (it is the freshest statement from
+// a running server), falls back to the persisted session, and manual entry
+// keeps working. PREMIERE_MCP_SEC_AUTO_PAIRING=0 server-side stops the writer.
+const PAIRING_FILENAME = "uxp-pairing.json";
+let pairedFrom = null;
+let connectedSincePairing = false;
+
+async function tryAutoPair() {
+  try {
+    const storage = typeof require === "function" ? require("uxp").storage.localFileSystem : null;
+    if (!storage || typeof storage.getDataFolder !== "function") return false;
+    const folder = await storage.getDataFolder();
+    let entry;
+    try { entry = await folder.getEntry(PAIRING_FILENAME); } catch (_) { return false; }
+    if (!entry) return false;
+    const raw = await entry.read();
+    const value = JSON.parse(raw);
+    if (!value || value.schema !== "premiere-mcp.uxp-pairing.v1") return false;
+    if (typeof value.url !== "string" || !value.url || typeof value.token !== "string" || !value.token) return false;
+    const urlEl = document.getElementById("bridge-url");
+    const tokenEl = document.getElementById("bridge-token");
+    if (urlEl) urlEl.value = value.url;
+    if (tokenEl) tokenEl.value = value.token;
+    pairedFrom = value;
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -73,7 +105,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   try { await workspaceBroker.initialize(); } catch (error) { setStatus(error.message || String(error)); }
   try { await commandRegistry.initialize(); } catch (error) { setStatus(error.message || String(error)); }
   renderWorkspaceStatus();
-  restoreBridgeSession();
+  let paired = false;
+  try { paired = await tryAutoPair(); } catch (_) {}
+  if (!paired) restoreBridgeSession();
   subscribeHostEvents();
   connect();
   startFallbackPolling();
@@ -382,6 +416,7 @@ function connect() {
   setStatus("Connecting to " + url.origin + url.pathname);
   try { socket = new WebSocket(url); } catch (e) { return scheduleReconnect(e.message); }
   socket.onopen = async () => {
+    connectedSincePairing = true;
     persistBridgeSession(configuredUrl, token);
     setStatus("Connected");
     send(Protocol.envelope("hello", await capabilities()));
@@ -389,7 +424,16 @@ function connect() {
   };
   socket.onmessage = (event) => dispatch(event.data);
   socket.onerror = () => setStatus("Bridge connection error");
-  socket.onclose = () => { void commandRegistry.dispose(); scheduleReconnect("Disconnected"); };
+  socket.onclose = () => {
+    void commandRegistry.dispose();
+    // SEC FORK (SEC 10): a pairing file from a now-dead server would otherwise
+    // retry forever — fall back to the persisted session on first failure.
+    if (pairedFrom && !connectedSincePairing) {
+      pairedFrom = null;
+      restoreBridgeSession();
+    }
+    scheduleReconnect("Disconnected");
+  };
 }
 function scheduleReconnect(message) { setStatus(message + "; retrying in 2s"); reconnectTimer = setTimeout(connect, 2000); }
 function send(value) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(Protocol.serializeEnvelope(value)); }
