@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { RequestBodyTooLargeError } from "../src/http-admission.js";
 
 const currentVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
@@ -332,22 +333,61 @@ describe("stdio CLI entry point", () => {
     process.env.PREMIERE_UXP_TOKEN = "a-secure-token-with-length";
     process.env.PREMIERE_UXP_PORT = "7788";
     process.env.PREMIERE_MCP_DEBUG = "true";
+    process.env.PREMIERE_MCP_SEC_AUTO_PAIRING = "0";
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     await import("../src/index.js");
     await vi.waitFor(() => expect(mocks.uxpStart).toHaveBeenCalledOnce());
     expect(error).toHaveBeenCalledWith(expect.stringContaining("UXP bridge listening"));
   });
 
-  it("continues with CEP-only tools when another MCP instance owns the UXP loopback port", async () => {
+  it("falls back to an OS-assigned port and writes the pairing file when the default is busy (SEC 10)", async () => {
     process.argv = [process.execPath, "index.js"];
     process.env.PREMIERE_UXP_TOKEN = "a-secure-token-with-length";
+    const fixtureTemp = mkdtempSync(join(tmpdir(), "uxp-pairing-entry-"));
+    process.env.PREMIERE_TEMP_DIR = fixtureTemp;
+    process.env.APPDATA = mkdtempSync(join(tmpdir(), "uxp-pairing-appdata-")); // keep the real plugin storage untouched
+    process.env.PREMIERE_MCP_DEBUG = "true";
+    vi.mocked(await import("../src/bridge/file-bridge.js")).getTempDir.mockReturnValue(fixtureTemp);
     mocks.uxpStart.mockRejectedValueOnce(Object.assign(new Error("address already in use"), { code: "EADDRINUSE" }));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await import("../src/index.js");
 
     await vi.waitFor(() => expect(mocks.serveStdio).toHaveBeenCalledOnce());
-    expect(mocks.connect).toHaveBeenCalledOnce();
+    expect(mocks.uxpStart).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("dynamically assigned port"));
+    const pairingFile = join(fixtureTemp, "uxp-pairing.json"); // getTempDir returns PREMIERE_TEMP_DIR verbatim
+    const stored = JSON.parse(readFileSync(pairingFile, "utf8"));
+    expect(stored).toMatchObject({ schema: "premiere-mcp.uxp-pairing.v1", url: "ws://127.0.0.1:7788/premiere-uxp", pid: process.pid });
+  });
+
+  it("continues with CEP-only tools when the dynamic fallback also fails", async () => {
+    process.argv = [process.execPath, "index.js"];
+    process.env.PREMIERE_UXP_TOKEN = "a-secure-token-with-length";
+    process.env.PREMIERE_MCP_SEC_AUTO_PAIRING = "0";
+    const busy = Object.assign(new Error("address already in use"), { code: "EADDRINUSE" });
+    mocks.uxpStart.mockRejectedValueOnce(busy).mockRejectedValueOnce(busy);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await import("../src/index.js");
+
+    await vi.waitFor(() => expect(mocks.serveStdio).toHaveBeenCalledOnce());
+    expect(mocks.uxpStart).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("continuing with CEP-only tools"));
+  });
+
+  it("continues with CEP-only tools when an explicitly configured port is busy", async () => {
+    process.argv = [process.execPath, "index.js"];
+    process.env.PREMIERE_UXP_TOKEN = "a-secure-token-with-length";
+    process.env.PREMIERE_UXP_PORT = "7788";
+    process.env.PREMIERE_MCP_SEC_AUTO_PAIRING = "0";
+    mocks.uxpStart.mockRejectedValueOnce(Object.assign(new Error("address already in use"), { code: "EADDRINUSE" }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await import("../src/index.js");
+
+    await vi.waitFor(() => expect(mocks.serveStdio).toHaveBeenCalledOnce());
+    expect(mocks.uxpStart).toHaveBeenCalledTimes(1); // explicit port: no dynamic fallback
     expect(error).toHaveBeenCalledWith(expect.stringContaining("continuing with CEP-only tools"));
   });
 

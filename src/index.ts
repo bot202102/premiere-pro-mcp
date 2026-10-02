@@ -9,6 +9,7 @@ import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 import { UxpWebSocketBridge } from "./bridge/uxp-websocket-bridge.js";
+import { deleteOwnPairingFiles, writePairingFiles } from "./bridge/uxp-pairing.js";
 import {
   collectLocalDoctor,
   createDoctorRepairPlan,
@@ -37,6 +38,7 @@ const secCheckUpdateNet = ["1", "true", "yes", "on"].includes(
   (process.env.PREMIERE_MCP_SEC_CHECK_UPDATE_NET ?? "").toLowerCase(),
 );
 const secDefaultProfileOn = (process.env.PREMIERE_MCP_SEC_DEFAULT_PROFILE ?? "1") !== "0";
+const secAutoPairingOn = (process.env.PREMIERE_MCP_SEC_AUTO_PAIRING ?? "1") !== "0";
 
 function debugLog(message: string): void {
   if (debugEnabled) {
@@ -195,7 +197,8 @@ Environment variables:
   PREMIERE_MCP_DEBUG    Set to 1/true to enable verbose stderr diagnostics
   PREMIERE_MCP_PROTOCOL_MODE  auto (default) or legacy; use legacy only when a client cannot complete modern MCP negotiation
   PREMIERE_UXP_TOKEN    Enable the authenticated local UXP bridge (minimum 16 characters)
-  PREMIERE_UXP_PORT     UXP loopback WebSocket port (default: 7777)
+  PREMIERE_UXP_PORT     UXP loopback WebSocket port (default: 7777, or an OS-assigned free port when busy)
+  PREMIERE_MCP_SEC_AUTO_PAIRING  Set to 0 to disable writing the UXP pairing file (SEC 10)
   AFTER_EFFECTS_MCP_TEMP_DIR  Shared AE bridge directory (default: OS temp + /after-effects-mcp-bridge)
 
 More info: https://github.com/leancoderkavy/premiere-pro-mcp
@@ -376,22 +379,58 @@ async function main() {
 
   let uxpBridge: UxpWebSocketBridge | undefined;
   if (process.env.PREMIERE_UXP_TOKEN) {
+    const explicitPort = process.env.PREMIERE_UXP_PORT
+      ? parseInt(process.env.PREMIERE_UXP_PORT, 10)
+      : undefined;
     const bridge = new UxpWebSocketBridge({
       token: process.env.PREMIERE_UXP_TOKEN,
-      port: process.env.PREMIERE_UXP_PORT
-        ? parseInt(process.env.PREMIERE_UXP_PORT, 10)
-        : undefined,
+      port: explicitPort,
     });
     try {
       await bridge.start();
       uxpBridge = bridge;
-      const address = bridge.address();
-      debugLog(`UXP bridge listening on ws://${address.host}:${address.port}${address.path}`);
     } catch (error) {
-      if (!isLoopbackPortInUse(error)) throw error;
-      console.error(
-        "[premiere-pro-mcp] UXP bridge unavailable because its loopback port is already in use; continuing with CEP-only tools.",
-      );
+      if (!isLoopbackPortInUse(error) || explicitPort !== undefined) {
+        if (isLoopbackPortInUse(error)) {
+          console.error(
+            "[premiere-pro-mcp] UXP bridge unavailable because its loopback port is already in use; continuing with CEP-only tools.",
+          );
+        } else {
+          throw error;
+        }
+      } else {
+        // SEC 10 (fork): default port busy (e.g. another server instance) —
+        // fall back to an OS-assigned loopback port so the bridge still comes
+        // up. The pairing file carries the resolved URL to the panel.
+        const fallback = new UxpWebSocketBridge({ token: process.env.PREMIERE_UXP_TOKEN, port: 0 });
+        try {
+          await fallback.start();
+          uxpBridge = fallback;
+          const dynamic = fallback.address();
+          console.error(
+            `[premiere-pro-mcp] UXP bridge default port busy; using dynamically assigned port ${dynamic.port}.`,
+          );
+        } catch {
+          console.error(
+            "[premiere-pro-mcp] UXP bridge unavailable because its loopback port is already in use; continuing with CEP-only tools.",
+          );
+        }
+      }
+    }
+    if (uxpBridge) {
+      const address = uxpBridge.address();
+      debugLog(`UXP bridge listening on ws://${address.host}:${address.port}${address.path}`);
+      if (secAutoPairingOn) {
+        try {
+          const written = writePairingFiles({
+            url: `ws://${address.host}:${address.port}${address.path}`,
+            token: process.env.PREMIERE_UXP_TOKEN,
+          }, tempDir);
+          if (written.length) debugLog(`UXP pairing file written to ${written.length} location(s)`);
+        } catch (error) {
+          debugLog(`UXP pairing file could not be written: ${error instanceof Error ? error.message : error}`);
+        }
+      }
     }
   }
 
@@ -418,6 +457,7 @@ async function main() {
 
   const shutdown = async () => {
     if (uxpBridge) await uxpBridge.stop();
+    if (secAutoPairingOn && process.env.PREMIERE_UXP_TOKEN) deleteOwnPairingFiles(tempDir);
     await serverHandle.close();
     await telemetry.shutdown();
   };
