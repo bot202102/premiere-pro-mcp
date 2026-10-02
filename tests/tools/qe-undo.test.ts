@@ -23,9 +23,16 @@ const targeting = getTrackTargetingTools(bridgeOptions);
 
 beforeEach(() => vi.clearAllMocks());
 
+it("refuses undo and redo without a current stack index", async () => {
+  await expect(project.undo.handler({})).resolves.toMatchObject({ success: false, error: expect.stringContaining("required") });
+  await expect(targeting.redo.handler({})).resolves.toMatchObject({ success: false, error: expect.stringContaining("required") });
+  await expect(targeting.multiple_undo.handler({ count: 2 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("required") });
+  expect(mockedSendCommand).not.toHaveBeenCalled();
+});
+
 function run(context: Record<string, unknown>) {
   mockedSendCommand.mockImplementation(async (script: string) =>
-    JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, context))));
+    JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, { $: { global: {} }, ...context }))));
 }
 
 /** Live 25.2: undo()/redo() return true and move undoStackIndex() by one; at the ends nothing moves. */

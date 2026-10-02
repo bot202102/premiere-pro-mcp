@@ -3,13 +3,16 @@ import { runInNewContext } from "node:vm";
 import { getHelpersSource } from "../../src/bridge/script-builder.js";
 import type { BridgeOptions } from "../../src/bridge/file-bridge.js";
 
+vi.mock("../../src/tools/media-evidence.js", () => ({ probeMediaDurationTicks: vi.fn().mockResolvedValue(3600 * 254016000000) }));
+
 vi.mock("../../src/bridge/file-bridge.js", () => ({
-  sendCommand: vi.fn().mockResolvedValue({ success: true, data: {} }),
+  sendCommand: vi.fn().mockResolvedValue({ success: true, data: { mediaPath: "/fixture/source.mp4" } }),
   sendRawCommand: vi.fn().mockResolvedValue({ success: true, data: {} }),
   getTempDir: vi.fn().mockReturnValue("/tmp/test"),
   cleanupTempDir: vi.fn(),
 }));
 
+import { probeMediaDurationTicks } from "../../src/tools/media-evidence.js";
 import { sendCommand } from "../../src/bridge/file-bridge.js";
 import { getAdvancedTools } from "../../src/tools/advanced.js";
 import { getTimelineTools } from "../../src/tools/timeline.js";
@@ -20,7 +23,7 @@ const bridgeOptions: BridgeOptions = { tempDir: "/tmp/linked-trim", timeoutMs: 5
 const tools = getAdvancedTools(bridgeOptions);
 type Result = { success: boolean; error?: string; data?: Record<string, unknown> };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(probeMediaDurationTicks).mockResolvedValue(100 * 254016000000); });
 
 const ticksOf = (value: unknown) => parseFloat(typeof value === "object" && value ? String((value as { ticks: string }).ticks) : String(value));
 const secs = (t: number) => Math.round((t / TICKS) * 1000) / 1000;
@@ -66,11 +69,11 @@ function host(options: { audioRejectsInPoint?: boolean; audioLocked?: boolean } 
     audioTracks: { numTracks: 1, 0: { clips: collection(audio), isLocked: () => options.audioLocked === true } },
   };
   const context = {
-    app: { project: { activeSequence: seq, sequences: { numSequences: 1, 0: seq } } },
+    app: { project: { documentID: "project", activeSequence: seq, sequences: { numSequences: 1, 0: seq } } },
     Time: function Time(this: { ticks: string }) { this.ticks = "0"; },
   };
   mockedSendCommand.mockImplementation(async (script: string) => JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, context))));
-  return { video, audio };
+  return { video, audio, seq, context };
 }
 
 describe("trim edits keep linked audio in sync", () => {
@@ -114,7 +117,7 @@ describe("trim edits keep linked audio in sync", () => {
     host({ audioRejectsInPoint: true });
     const result = await tools.slip_edit.handler({ node_id: "v1", offset_seconds: 1 }) as Result;
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/slip was applied to the clip but not to its linked audio clip on track 1.*timeline changed and was not rolled back/);
+    expect(result.error).toMatch(/slip failed for its linked audio clip on track 1/);
     expect(result.data).toMatchObject({ timelineChanged: true, failedPartner: { nodeId: "a1" } });
   });
 });
@@ -354,3 +357,386 @@ describe("a partner Premiere moves while the main clip is written", () => {
   });
 });
 
+
+describe("physical source bounds fail before timeline mutation", () => {
+  it.each([39, 10.02])("rejects source out %s beyond physical duration without frame tolerance and leaves linked clips unchanged", async newOut => {
+    const { video, audio } = host();
+    const before = [...video, ...audio].map(clip => clip.snapshot());
+    const timeline = getTimelineTools(bridgeOptions, { probeMediaDurationSeconds: async () => 10 });
+    const advanced = getAdvancedTools(bridgeOptions, { probeMediaDurationSeconds: async () => 10 });
+    await expect(timeline.trim_clip.handler({ node_id: "v0", new_out_seconds: newOut })).resolves.toMatchObject({ success: false, error: expect.stringContaining("real media duration") });
+    await expect(advanced.slip_edit.handler({ node_id: "v0", offset_seconds: 2 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("real media duration") });
+    expect([...video, ...audio].map(clip => clip.snapshot())).toEqual(before);
+  });
+
+  it("refuses different linked media before applying either clip", async () => {
+    const { video, audio } = host();
+    audio[1].projectItem.getMediaPath = () => "/unprobed/audio.wav";
+    const before = [...video, ...audio].map(clip => clip.snapshot());
+    const advanced = getAdvancedTools(bridgeOptions, { probeMediaDurationSeconds: async () => 3600 });
+    await expect(advanced.slip_edit.handler({ node_id: "v1", offset_seconds: 1 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("without the preflight duration evidence") });
+    expect([...video, ...audio].map(clip => clip.snapshot())).toEqual(before);
+  });
+
+  it.each([null, NaN, Infinity, -1, 0])("refuses unknown or invalid physical duration %s without sending a mutation", async duration => {
+    host();
+    const advanced = getAdvancedTools(bridgeOptions, { probeMediaDurationSeconds: async () => duration });
+    await expect(advanced.slip_edit.handler({ node_id: "v1", offset_seconds: 1 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("Physical media duration") });
+    expect(mockedSendCommand).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("source end tick precision", () => {
+  it.each([40000, 0.5 / TICKS])("refuses duration %s outside the exact positive tick range before mutation", async duration => {
+    const { video, audio } = host();
+    const before = [...video, ...audio].map(clip => clip.snapshot());
+    const advanced = getAdvancedTools(bridgeOptions, { probeMediaDurationSeconds: async () => duration });
+    const timeline = getTimelineTools(bridgeOptions, { probeMediaDurationSeconds: async () => duration });
+    await expect(advanced.slip_edit.handler({ node_id: "v0", offset_seconds: 1 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("exact tick range") });
+    await expect(timeline.trim_clip.handler({ node_id: "v0", new_out_seconds: 9 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("exact tick range") });
+    expect([...video, ...audio].map(clip => clip.snapshot())).toEqual(before);
+    expect(mockedSendCommand).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("exact probed tick caps", () => {
+  it("allows the exact source end and rejects one tick beyond it before changing either linked clip", async () => {
+    const { video, audio } = host();
+    const cap = 61 * TICKS;
+    const timeline = getTimelineTools(bridgeOptions, { probeMediaDurationTicks: async () => cap });
+    await expect(timeline.trim_clip.handler({ node_id: "v2", new_out_seconds: cap / TICKS })).resolves.toMatchObject({ success: true });
+    const before = [...video, ...audio].map(clip => clip.snapshot());
+    const beforeTicks = [...video, ...audio].map(clip => [clip.inPoint.ticks, clip.outPoint.ticks, clip.start.ticks, clip.end.ticks]);
+    await expect(timeline.trim_clip.handler({ node_id: "v2", new_out_seconds: (cap + 1) / TICKS })).resolves.toMatchObject({ success: false, error: expect.stringContaining("real media duration") });
+    expect([...video, ...audio].map(clip => clip.snapshot())).toEqual(before);
+    expect([...video, ...audio].map(clip => [clip.inPoint.ticks, clip.outPoint.ticks, clip.start.ticks, clip.end.ticks])).toEqual(beforeTicks);
+  });
+
+  it("slip accepts the exact tick cap without subtracting a global epsilon", async () => {
+    const { video, audio } = host();
+    const advanced = getAdvancedTools(bridgeOptions, { probeMediaDurationTicks: async () => 31 * TICKS });
+    await expect(advanced.slip_edit.handler({ node_id: "v1", offset_seconds: 1 })).resolves.toMatchObject({ success: true });
+    expect(video[1].snapshot()).toEqual([10, 30, 11, 31]);
+    expect(audio[1].snapshot()).toEqual([10, 30, 11, 31]);
+  });
+});
+
+
+describe("physical evidence stays bound to project and sequence context", () => {
+  it.each(["trim", "slip"])("%s refuses a copied project reusing clip and sequence IDs", async (operation) => {
+    const { video, audio, context } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    const writes = [...video, ...audio].flatMap((clip) => [vi.spyOn(clip, "inPoint", "set"), vi.spyOn(clip, "outPoint", "set"), vi.spyOn(clip, "start", "set"), vi.spyOn(clip, "end", "set")]);
+    const probe = async () => {
+      context.app.project = { ...context.app.project, documentID: "copied-project" };
+      return 3600 * TICKS;
+    };
+    const result = operation === "trim"
+      ? await getTimelineTools(bridgeOptions, { probeMediaDurationTicks: probe }).trim_clip.handler({ node_id: "v1", new_out_seconds: 29 })
+      : await getAdvancedTools(bridgeOptions, { probeMediaDurationTicks: probe }).slip_edit.handler({ node_id: "v1", offset_seconds: 1 });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("changed after media preflight") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each(["trim", "slip"])("%s refuses an active sequence switch reusing clip IDs and media", async (operation) => {
+    const { video, audio, context } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    const writes = [...video, ...audio].flatMap((clip) => [vi.spyOn(clip, "inPoint", "set"), vi.spyOn(clip, "outPoint", "set"), vi.spyOn(clip, "start", "set"), vi.spyOn(clip, "end", "set")]);
+    const probe = async () => {
+      context.app.project.activeSequence = { ...context.app.project.activeSequence, sequenceID: "copied-sequence" };
+      return 3600 * TICKS;
+    };
+    const result = operation === "trim"
+      ? await getTimelineTools(bridgeOptions, { probeMediaDurationTicks: probe }).trim_clip.handler({ node_id: "v1", new_out_seconds: 29 })
+      : await getAdvancedTools(bridgeOptions, { probeMediaDurationTicks: probe }).slip_edit.handler({ node_id: "v1", offset_seconds: 1 });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("changed after media preflight") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe("slide edge write order (#719)", () => {
+  it("extends the center end before moving its start past the old end", async () => {
+    const { video, audio } = host();
+    for (const list of [video, audio]) {
+      list[1].end = { ticks: String(11 * TICKS) }; list[1].outPoint = { ticks: String(11 * TICKS) };
+      list[2].start = { ticks: String(11 * TICKS) }; list[2].inPoint = { ticks: String(11 * TICKS) };
+      const start = Object.getOwnPropertyDescriptor(list[1], "start")!;
+      Object.defineProperty(list[1], "start", {
+        get: start.get,
+        set(value: unknown) { if (ticksOf(value) < ticksOf(list[1].end)) start.set!.call(list[1], value); },
+      });
+    }
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 3 })).resolves.toMatchObject({ success: true, data: { verified: true } });
+    expect(video[1].snapshot()).toEqual([13, 14, 10, 11]);
+    expect(audio[1].snapshot()).toEqual(video[1].snapshot());
+  });
+});
+
+describe("slide failure receipts (#719)", () => {
+  it("refuses a negative adjacent source in point before touching any clip", async () => {
+    const { video, audio } = host();
+    video[2].inPoint = { ticks: String(0.2 * TICKS) };
+    video[2].outPoint = { ticks: String(30.2 * TICKS) };
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: -0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("invalid adjacent source range") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+
+  it("reports partial mutation when the main clip ignores its new start", async () => {
+    const { video, audio } = host();
+    Object.defineProperty(video[1], "start", { get: () => ({ ticks: String(10 * TICKS) }), set: () => {} });
+    const result = await tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 }) as Result;
+    expect(result).toMatchObject({ success: false, data: { verified: false, outcome: "committed_unverified", timelineChanged: true, rollbackPerformed: false, linkedPartnersEdited: [] } });
+    expect(result.error).toContain("Do not retry");
+    expect(result.data?.affectedPlacements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: "v0", before: expect.any(String), after: expect.any(String) }),
+      expect.objectContaining({ nodeId: "v1" }), expect.objectContaining({ nodeId: "v2" }),
+    ]));
+    expect(video[0].snapshot()[1]).toBe(10.5);
+    expect(audio[0].snapshot()[1]).toBe(10);
+  });
+
+  it("reports partial mutation if a source setter throws after edge writes", async () => {
+    const { video } = host();
+    Object.defineProperty(video[0], "outPoint", { get: () => ({ ticks: String(10 * TICKS) }), set: () => { throw new Error("rejected source write"); } });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("rejected source write"), data: { outcome: "committed_unverified", timelineChanged: true } });
+  });
+
+  it("does not accept an unexpected center source-window change", async () => {
+    const { video } = host();
+    const setEnd = Object.getOwnPropertyDescriptor(video[1], "end")!.set!;
+    const getEnd = Object.getOwnPropertyDescriptor(video[1], "end")!.get!;
+    Object.defineProperty(video[1], "end", { get: getEnd, set(value: unknown) { setEnd.call(video[1], value); video[1].outPoint = { ticks: String(31 * TICKS) }; } });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, data: { verified: false, outcome: "committed_unverified" } });
+  });
+});
+
+describe("physical media bounds for adjacent edits (#718/#719)", () => {
+  it("refuses a roll source end past the actual file duration before mutation", async () => {
+    const { video, audio } = host();
+    vi.mocked(probeMediaDurationTicks).mockResolvedValue(60 * 254016000000);
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    video[1].inPoint = { ticks: String(39.8 * TICKS) };
+    video[1].outPoint = { ticks: String(59.8 * TICKS) };
+    const beforeAfterSetup = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools.roll_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("exceed physical media duration") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(beforeAfterSetup);
+    expect(before).not.toEqual(beforeAfterSetup);
+  });
+  it("refuses a slide when an existing neighbor is already past media end", async () => {
+    const { video, audio } = host();
+    vi.mocked(probeMediaDurationTicks).mockResolvedValue(20 * 254016000000);
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("existing source window") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it("refuses unknown physical duration rather than treating it as unlimited", async () => {
+    const { video, audio } = host();
+    vi.mocked(probeMediaDurationTicks).mockResolvedValue(null);
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools.roll_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("duration could not be verified") });
+    expect(mockedSendCommand).toHaveBeenCalledTimes(1);
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it.each(["roll_edit", "slide_edit"] as const)("refuses unsafe physical tick bounds before %s", async (tool) => {
+    const { video, audio } = host();
+    vi.mocked(probeMediaDurationTicks).mockResolvedValue(40000 * 254016000000);
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools[tool].handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("duration could not be verified") });
+    expect(mockedSendCommand).toHaveBeenCalledTimes(1);
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it("refuses source replacement after probing", async () => {
+    const { video, audio } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => { video[1].projectItem.getMediaPath = () => "/replacement.mp4"; return 100 * 254016000000; });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("Media source changed") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it.each(["roll_edit", "slide_edit"] as const)("refuses a same-ID project switch during probing before %s mutates", async (tool) => {
+    const { video, audio, context } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => {
+      context.app.project = { ...context.app.project, documentID: "different-project" };
+      return 100 * TICKS;
+    });
+    await expect(tools[tool].handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("Active project changed") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it("refuses an unreadable project identity before probing", async () => {
+    const { video, audio, context } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    Object.defineProperty(context.app.project, "documentID", { get: () => { throw new Error("unreadable document ID"); } });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("Project identity cannot be verified") });
+    expect(probeMediaDurationTicks).not.toHaveBeenCalled();
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it.each(["roll_edit", "slide_edit"] as const)("refuses a whole-track move during probing before %s mutates", async (tool) => {
+    const { video, audio, seq } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => {
+      const tracks = seq.videoTracks as typeof seq.videoTracks & Record<number, typeof seq.videoTracks[0]>;
+      tracks[1] = tracks[0]; tracks[0] = { clips: { numItems: 0 }, isLocked: () => false };
+      tracks.numTracks = 2;
+      return 100 * TICKS;
+    });
+    await expect(tools[tool].handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("track or collection position changed") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it("refuses an unchanged clip whose collection index changed during probing", async () => {
+    const { video, audio } = host();
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    const addition = makeClip("new-leading-clip", -2, -1, 0);
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => {
+      if (video[0] !== addition) video.unshift(addition);
+      return 100 * TICKS;
+    });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("track or collection position changed") });
+    expect([...video.slice(1), ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+  it("refuses changed placement after probing", async () => {
+    const { video } = host();
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => { video[1].start = { ticks: String(11 * TICKS) }; return 100 * 254016000000; });
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("placement or source window changed") });
+    expect(video[0].snapshot()[1]).toBe(10);
+  });
+});
+
+describe("exact physical source end", () => {
+  it("does not allow a one-tick overrun under readback tolerance", async () => {
+    const { video, audio } = host();
+    vi.mocked(probeMediaDurationTicks).mockResolvedValue(60 * 254016000000);
+    video[1].inPoint = { ticks: String(39.5 * TICKS + 1) };
+    video[1].outPoint = { ticks: String(59.5 * TICKS + 1) };
+    const before = [...video, ...audio].map((clip) => clip.snapshot());
+    await expect(tools.roll_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, error: expect.stringContaining("exceed physical media duration") });
+    expect([...video, ...audio].map((clip) => clip.snapshot())).toEqual(before);
+  });
+});
+
+describe("older normal-speed representation", () => {
+  it("accepts 100 percent as normal speed", async () => {
+    const { video, audio } = host();
+    for (const clip of [...video, ...audio]) clip.getSpeed = () => 100;
+    await expect(tools.slide_edit.handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: true });
+  });
+});
+
+describe("adjacent edits preserve validated linked membership", () => {
+  const edit = (operation: string) => operation === "roll"
+    ? tools.roll_edit.handler({ node_id: "v1", offset_seconds: 0.5 })
+    : tools.slide_edit.handler({ node_id: "v1", offset_seconds: -0.5 });
+  function observeWrites(clips: ReturnType<typeof makeClip>[]) {
+    return clips.flatMap((clip) => [vi.spyOn(clip, "start", "set"), vi.spyOn(clip, "end", "set"), vi.spyOn(clip, "inPoint", "set"), vi.spyOn(clip, "outPoint", "set")]);
+  }
+  it.each(["roll", "slide"])("%s refuses unreadable initial linkage before probing or writing", async (operation) => {
+    const { video, audio } = host();
+    const writes = observeWrites([...video, ...audio]);
+    video[1].getLinkedItems = () => { throw new Error("unreadable collection"); };
+    expect(await edit(operation)).toMatchObject({ success: false, error: expect.stringContaining("Linked membership could not be read") });
+    expect(probeMediaDurationTicks).not.toHaveBeenCalled();
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+  });
+  it.each(["roll", "slide"])("%s refuses unreadable second linkage before writing", async (operation) => {
+    const { video, audio } = host();
+    const writes = observeWrites([...video, ...audio]);
+    const read = video[1].getLinkedItems;
+    let calls = 0;
+    video[1].getLinkedItems = () => { if (++calls === 2) throw new Error("collection became unreadable"); return read(); };
+    expect(await edit(operation)).toMatchObject({ success: false, error: expect.stringContaining("Linked membership could not be read") });
+    expect(calls).toBe(2);
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+  });
+  it.each(["roll", "slide"])("%s refuses changed membership before writing", async (operation) => {
+    const { video, audio } = host();
+    const writes = observeWrites([...video, ...audio]);
+    vi.mocked(probeMediaDurationTicks).mockImplementation(async () => { video[1].group = [video[1]]; return 100 * TICKS; });
+    expect(await edit(operation)).toMatchObject({ success: false, error: expect.stringContaining("Linked membership changed") });
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+  });
+  it.each(["roll", "slide"])("%s applies the cached partner set without a third linkage read", async (operation) => {
+    const { video } = host();
+    const read = video[1].getLinkedItems;
+    let calls = 0;
+    video[1].getLinkedItems = () => { if (++calls > 2) throw new Error("must use validated cache"); return read(); };
+    expect(await edit(operation)).toMatchObject({ success: true, data: { linkedPartnersEdited: [{ nodeId: "a1", verified: true }] } });
+    expect(calls).toBe(2);
+  });
+});
+
+
+describe("trim/slip default linked coverage fails closed", () => {
+  const edit = (operation: string, includeLinked = true) => operation === "trim"
+    ? getTimelineTools(bridgeOptions).trim_clip.handler({ node_id: "v1", new_out_seconds: 29, include_linked: includeLinked })
+    : tools.slip_edit.handler({ node_id: "v1", offset_seconds: 1, include_linked: includeLinked });
+  const unreadable = [
+    { name: "throwing accessor", read: () => { throw new Error("unreadable linkage"); } },
+    { name: "null collection", read: () => null },
+    { name: "missing count", read: () => ({}) },
+    { name: "fractional count", read: () => ({ numItems: 1.5 }) },
+    { name: "missing member", read: () => ({ numItems: 1 }) },
+    { name: "missing member identity", read: () => ({ numItems: 1, 0: {} }) },
+    { name: "unlocated member", read: () => ({ numItems: 1, 0: { nodeId: "missing" } }) },
+  ];
+  for (const operation of ["trim", "slip"]) {
+    it.each(unreadable)(operation + " refuses $name with zero native writes", async ({ read }) => {
+      const { video, audio } = host();
+      const writes = [...video, ...audio].flatMap((clip) => [vi.spyOn(clip, "start", "set"), vi.spyOn(clip, "end", "set"), vi.spyOn(clip, "inPoint", "set"), vi.spyOn(clip, "outPoint", "set")]);
+      video[1].getLinkedItems = read as typeof video[1]["getLinkedItems"];
+      expect(await edit(operation)).toMatchObject({ success: false, error: expect.stringContaining("Linked membership could not be verified") });
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+    });
+    it(operation + " keeps explicit include_linked false usable despite unreadable linkage", async () => {
+      const { video, audio } = host();
+      const beforeAudio = audio[1].snapshot();
+      const read = vi.fn(() => { throw new Error("unreadable linkage"); });
+      video[1].getLinkedItems = read;
+      expect(await edit(operation, false)).toMatchObject({ success: true, data: { linkedPartnersEdited: [] } });
+      expect(read).not.toHaveBeenCalled();
+      expect(audio[1].snapshot()).toEqual(beforeAudio);
+    });
+  }
+});
+
+
+describe("native adjacent failure evidence classification", () => {
+  it.each(["roll_edit", "slide_edit"] as const)("%s reports throw-before-first-write as not applied", async (operation) => {
+    const { video } = host();
+    const first = operation === "roll_edit" ? video[1] : video[0];
+    const getter = Object.getOwnPropertyDescriptor(first, "end")!.get!;
+    Object.defineProperty(first, "end", { get: getter, set: () => { throw new Error("before first write"); } });
+    const result = await tools[operation].handler({ node_id: "v1", offset_seconds: 0.5 }) as Result;
+    expect(result).toMatchObject({ success: false, data: { mutationAttempted: true, outcome: "not_applied", timelineChanged: false, contextStable: true, rollbackPerformed: false } });
+    expect(result.error).toContain("before first write");
+  });
+
+  it.each(["roll_edit", "slide_edit"] as const)("%s retains an observed first edge write before a throw", async (operation) => {
+    const { video } = host();
+    const first = operation === "roll_edit" ? video[1] : video[0];
+    const property = Object.getOwnPropertyDescriptor(first, "end")!;
+    Object.defineProperty(first, "end", { get: property.get, set(value: unknown) { property.set!.call(first, value); throw new Error("after edge write"); } });
+    const result = await tools[operation].handler({ node_id: "v1", offset_seconds: 0.5 }) as Result;
+    expect(result).toMatchObject({ success: false, data: { mutationAttempted: true, outcome: "committed_unverified", timelineChanged: true, contextStable: true, rollbackPerformed: false } });
+    expect(result.data?.affectedPlacements).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: first.nodeId, before: expect.any(String), after: expect.any(String) })]));
+    expect(first.snapshot()[1]).toBe(operation === "roll_edit" ? 30.5 : 10.5);
+  });
+
+  it.each(["roll_edit", "slide_edit"] as const)("%s reports unreadable post-attempt clocks as unknown", async (operation) => {
+    const { video } = host();
+    const first = operation === "roll_edit" ? video[1] : video[0];
+    const getter = Object.getOwnPropertyDescriptor(first, "end")!.get!;
+    let attempted = false;
+    Object.defineProperty(first, "end", { get() { if (attempted) throw new Error("clock unavailable"); return getter.call(first); }, set() { attempted = true; throw new Error("native attempt failed"); } });
+    await expect(tools[operation].handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, data: { mutationAttempted: true, outcome: "failed", mutationOutcome: "unknown", timelineChanged: null, contextStable: true } });
+  });
+
+  it.each(["roll_edit", "slide_edit"] as const)("%s reports a project switch during a throwing write as unknown", async (operation) => {
+    const { video, context } = host();
+    const first = operation === "roll_edit" ? video[1] : video[0];
+    const getter = Object.getOwnPropertyDescriptor(first, "end")!.get!;
+    Object.defineProperty(first, "end", { get: getter, set() { context.app.project = { ...context.app.project, documentID: "other-project" }; throw new Error("project switched during native write"); } });
+    await expect(tools[operation].handler({ node_id: "v1", offset_seconds: 0.5 })).resolves.toMatchObject({ success: false, data: { mutationAttempted: true, outcome: "failed", mutationOutcome: "unknown", timelineChanged: null, contextStable: false } });
+  });
+});

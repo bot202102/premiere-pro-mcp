@@ -1,10 +1,81 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
 
+/** Shared ES3 readback for the two QE effect-add paths. */
+function applyEffectWithReadback(kind: "Video" | "Audio"): string {
+  return `
+    var before = [];
+    function readComponents() {
+      var components = result.clip.components;
+      var count = components && components.numItems;
+      if (typeof count !== "number" || !isFinite(count) || count < 0 || Math.floor(count) !== count) {
+        throw new Error("Component count is unavailable");
+      }
+      var snapshot = [];
+      for (var c = 0; c < count; c++) {
+        snapshot.push({ displayName: String(components[c].displayName || ""), matchName: String(components[c].matchName || "") });
+      }
+      return snapshot;
+    }
+    try { before = readComponents(); }
+    catch (beforeError) { return __error("Cannot read components before adding the effect; nothing was changed."); }
+    var addError = "";
+    try { qeClip.add${kind}Effect(qeEffect); }
+    catch (effectError) { addError = String(effectError); }
+    var after = null;
+    var added = [];
+    try {
+      after = readComponents();
+      var matched = [];
+      for (var a = 0; a < after.length; a++) {
+        var found = false;
+        for (var b = 0; b < before.length; b++) {
+          if (!matched[b] && before[b].displayName === after[a].displayName && before[b].matchName === after[a].matchName) {
+            matched[b] = true;
+            found = true;
+            break;
+          }
+        }
+        if (!found) added.push(after[a]);
+      }
+    } catch (readError) { after = null; }
+    var data = {
+      effect: effectName, lookupSource: lookupSource, clipName: result.clip.name,
+      componentCountBefore: before.length, componentCountAfter: after ? after.length : null,
+      addedComponents: added, verified: false, outcome: "committed_unverified",
+      renderVerified: false, verificationScope: "Component-list readback only; verify live playback or rendered output before delivery."
+    };
+    if (after && after.length > before.length && added.length > 0) {
+      data.timelineChanged = true;
+      if (!addError) {
+        data.applied = true;
+        data.verified = true;
+        data.outcome = "verified";
+        return __result(data);
+      }
+    }
+    var undoNow = typeof __readUndoIndex === "function" && __undoStart !== null ? __readUndoIndex() : null;
+    if (__undoStart !== null && undoNow !== null && undoNow === __undoStart && after && after.length === before.length && added.length === 0 && !addError) {
+      data.outcome = "not_applied";
+      return __jsonStringify({ success: false, error: "Premiere added no component for " + effectName + "; nothing was changed.", data: data });
+    }
+    data.note = "Do not retry blindly: QE may have added the effect even when it is missing from the DOM component list. Inspect the clip before retrying.";
+    if (addError) data.hostError = addError;
+    if (typeof __readUndoIndex === "function" && __undoStart !== null) {
+      if (undoNow !== null && undoNow > __undoStart) {
+        data.undoSteps = undoNow - __undoStart;
+        data.undoStackIndex = undoNow;
+        data.timelineChanged = true;
+      }
+    }
+    return __jsonStringify({ success: false, error: "Effect addition could not be verified. " + data.note, data: data });
+  `;
+}
+
 export function getEffectsTools(bridgeOptions: BridgeOptions) {
   return {
     apply_effect: {
-      description: "Apply a video effect to a clip. Uses QE DOM catalog lookup, with an exact-name QE probe when Premiere's catalog enumeration is empty.",
+      description: "Apply a video effect to a clip. Experimental QE DOM catalog lookup includes an exact-name probe when enumeration is empty. A component-list readback does not verify rendered pixels.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -58,15 +129,14 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
             }
           }
           if (!qeEffect) return __error("Effect not found: " + effectName);
-          qeClip.addVideoEffect(qeEffect);
-          return __result({ applied: true, effect: effectName, lookupSource: lookupSource, clipName: result.clip.name });
+          ${applyEffectWithReadback("Video")}
         `);
         return sendCommand(script, bridgeOptions);
       },
     },
 
     apply_audio_effect: {
-      description: "Apply an audio effect to a clip. Uses QE catalog lookup, with an exact-name QE probe when enumeration is empty.",
+      description: "Apply an audio effect to a clip. Experimental QE catalog lookup includes an exact-name probe when enumeration is empty. A component-list readback does not verify rendered audio.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -113,8 +183,7 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
             }
           }
           if (!qeEffect) return __error("Audio effect not found: " + effectName);
-          qeClip.addAudioEffect(qeEffect);
-          return __result({ applied: true, effect: effectName, lookupSource: lookupSource });
+          ${applyEffectWithReadback("Audio")}
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -222,7 +291,7 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
     },
 
     color_correct: {
-      description: "Apply basic color correction to a clip using Lumetri Color",
+      description: "Apply basic color correction through experimental QE Lumetri insertion. Requires Lumetri component and requested property readback; rendered output is not verified.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -271,14 +340,24 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           ] as Array<{ key: string; label: string; value: number | undefined }>
         ).filter((c): c is { key: string; label: string; value: number } => c.value !== undefined);
 
+        if (!controls.length) return { success: false, error: "Specify at least one color correction value; nothing was changed." };
+        if (controls.some((control) => !Number.isFinite(control.value))) return { success: false, error: "Color correction values must be finite numbers; nothing was changed." };
+
         const setters = controls
           .map(
             (c) => `
               if (!taken.${c.key} && name === "${c.label}") {
                 try {
+                  writeAttempted = true;
                   prop.setValue(${c.value}, true);
-                  taken.${c.key} = true;
-                  changes.${c.key} = ${c.value};
+                  var observed = Number(prop.getValue());
+                  if (!isFinite(observed) || Math.abs(observed - ${c.value}) > 0.001) {
+                    errors.${c.key} = "Premiere did not read back the requested value";
+                  } else {
+                    taken.${c.key} = true;
+                    changes.${c.key} = observed;
+                    delete errors.${c.key};
+                  }
                 } catch(e) {
                   errors.${c.key} = e.toString();
                 }
@@ -298,13 +377,17 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           // Apply Lumetri Color if not already present
           var clip = result.clip;
           var hasLumetri = false;
+          var lumetri = null;
           for (var i = 0; i < clip.components.numItems; i++) {
             if (clip.components[i].displayName === "Lumetri Color") {
               hasLumetri = true;
+              lumetri = clip.components[i];
               break;
             }
           }
-          
+
+          var qeAttempted = false;
+          var qeAddError = "";
           if (!hasLumetri) {
             var qeTrack = qeSeq.getVideoTrackAt(result.trackIndex);
             // QE track items include gaps, so the DOM clip index is not a QE index.
@@ -313,11 +396,24 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
             var effectCatalog = __getQeEffectCatalog("video");
             if (!effectCatalog.ok) return __error(effectCatalog.error);
             var effects = effectCatalog.effects;
+            var qeEffect = null;
             for (var i = 0; i < effects.numItems; i++) {
               if (effects[i].name === "Lumetri Color") {
-                qeClip.addVideoEffect(__qeEffectObject("video", effects[i]));
+                qeEffect = __qeEffectObject("video", effects[i]);
                 break;
               }
+            }
+            if (!qeEffect) return __error("The QE video-effect catalog does not contain Lumetri Color; nothing was changed.");
+            qeAttempted = true;
+            try { qeClip.addVideoEffect(qeEffect); } catch (eAdd) { qeAddError = String(eAdd); }
+            for (var li = 0; li < clip.components.numItems; li++) {
+              if (clip.components[li].displayName === "Lumetri Color") { lumetri = clip.components[li]; break; }
+            }
+            if (!lumetri) {
+              return __jsonStringify({ success: false,
+                error: "Premiere did not expose a Lumetri Color component after the QE add attempt; color correction was not verified. Inspect the clip before retrying.",
+                data: { colorCorrected: false, verified: false, renderVerified: false,
+                  timelineChanged: true, outcome: "committed_unverified", hostError: qeAddError } });
             }
           }
 
@@ -330,19 +426,31 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           var changes = {};
           var errors = {};
           var taken = {};
+          var writeAttempted = false;
 
-          for (var i = 0; i < clip.components.numItems; i++) {
-            var comp = clip.components[i];
-            if (comp.displayName !== "Lumetri Color") continue;
-            for (var p = 0; p < comp.properties.numItems; p++) {
-              var prop = comp.properties[p];
+          try {
+            for (var p = 0; p < lumetri.properties.numItems; p++) {
+              var prop = lumetri.properties[p];
               var name = prop.displayName;
               ${setters}
             }
-            break;
+          } catch (propertyError) { errors.properties = String(propertyError); }
+          var changeCount = 0;
+          ${controls.map((control) => `if (!taken.${control.key} && !errors.${control.key}) errors.${control.key} = "Requested Lumetri property was not found or writable";`).join("\n")}
+          for (var changedKey in changes) if (changes.hasOwnProperty(changedKey)) changeCount++;
+          if (changeCount !== ${controls.length} || qeAddError) {
+            var mutationAttempted = qeAttempted || writeAttempted;
+            return __jsonStringify({ success: false,
+              error: mutationAttempted
+                ? "Lumetri Color did not read back every requested value; the timeline may have changed. Inspect the clip before retrying."
+                : "No requested Lumetri control was found or writable; nothing was changed.",
+              data: { colorCorrected: false, verified: false, renderVerified: false,
+                timelineChanged: mutationAttempted, outcome: mutationAttempted ? "committed_unverified" : "not_applied",
+                clipName: clip.name, changes: changes, errors: errors, hostError: qeAddError } });
           }
-
-          return __result({ colorCorrected: true, clipName: clip.name, changes: changes, errors: errors });
+          return __result({ colorCorrected: true, verified: true, renderVerified: false,
+            verificationScope: "Lumetri component and property readback only; inspect rendered output before delivery.",
+            clipName: clip.name, changes: changes, errors: errors });
         `);
         return sendCommand(script, bridgeOptions);
       },

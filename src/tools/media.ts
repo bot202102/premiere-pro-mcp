@@ -6,13 +6,14 @@ import { resolve } from "node:path";
 export function getMediaTools(bridgeOptions: BridgeOptions) {
   return {
     import_media: {
-      description: "Import media files into the project",
+      description: "Import media files into the project and confirm a new project item for each file",
       parameters: {
         type: "object" as const,
         properties: {
           file_paths: {
             type: "array",
-            items: { type: "string" },
+            minItems: 1,
+            items: { type: "string", minLength: 1 },
             description: "Array of file paths to import",
           },
           target_bin: {
@@ -29,7 +30,7 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
       handler: async (args: { file_paths: string[]; target_bin?: string; suppress_ui?: boolean }) => {
         // SEC FORK (#725 FAM-5): an empty array used to fall through to a vague
         // "Import failed"; require at least one real path.
-        if (!Array.isArray(args.file_paths) || args.file_paths.length === 0 || args.file_paths.some((p) => !p || !p.trim())) {
+        if (!Array.isArray(args.file_paths) || args.file_paths.length === 0 || args.file_paths.some((p) => typeof p !== "string" || !p.trim())) {
           return { success: false as const, error: "file_paths must contain at least one non-empty path" };
         }
         // importFiles with a nonexistent path opens a blocking modal in Premiere
@@ -37,10 +38,14 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         // hand the host native separators.
         const resolvedPaths = args.file_paths.map((p) => resolve(p));
         const missing: string[] = [];
-        const directories: string[] = [];
+        const nonFiles: string[] = [];
         for (const p of resolvedPaths) {
-          if (!existsSync(p)) missing.push(p);
-          else if (statSync(p).isDirectory()) directories.push(p);
+          try {
+            if (!existsSync(p)) missing.push(p);
+            else if (!statSync(p).isFile()) nonFiles.push(p);
+          } catch {
+            return { success: false as const, error: `Could not inspect import path: ${p} — nothing was imported.` };
+          }
         }
         if (missing.length > 0) {
           return {
@@ -48,10 +53,10 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
             error: `File(s) not found: ${missing.join(", ")} — nothing was imported. importFiles with a missing path opens a blocking dialog in Premiere.`,
           };
         }
+        if (nonFiles.length > 0) {
+          return { success: false as const, error: `file_paths must contain files, not directories or special paths: ${nonFiles.join(", ")}. Use import_folder for a directory; nothing was imported.` };
+        }
         const paths = resolvedPaths.map((p) => `"${escapeForExtendScript(p)}"`).join(", ");
-        const directoryNote = directories.length > 0
-          ? `, importedFolders: ${JSON.stringify(directories)}, note: "Folders import as bins; files lists only real files"`
-          : "";
         const suppress = args.suppress_ui !== false ? "true" : "false";
         const binLookup = args.target_bin
           ? `var targetBin = __findProjectItem("${escapeForExtendScript(args.target_bin)}");
@@ -61,9 +66,38 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         const script = buildToolScript(`
           ${binLookup}
           var filePaths = [${paths}];
+          var missing = [];
+          for (var m = 0; m < filePaths.length; m++) if (!new File(filePaths[m]).exists) missing.push(filePaths[m]);
+          if (missing.length) return __error("No file exists at: " + missing.join(", ") + ". Nothing was imported.");
+          function __childIds() {
+            var ids = {};
+            var count = __childCount(targetBin);
+            for (var c = 0; c < count; c++) { var child = __childAt(targetBin, c); if (child) ids[String(child.nodeId)] = true; }
+            return ids;
+          }
+          var before = __childIds();
           var importSuccess = app.project.importFiles(filePaths, ${suppress}, targetBin, false);
-          if (!importSuccess) return __error("Import failed");
-          return __result({ imported: filePaths.length, files: filePaths${directoryNote} });
+          // Match new items in the target bin to the requested paths.
+          var added = [];
+          var count = __childCount(targetBin);
+          for (var c = 0; c < count; c++) {
+            var child = __childAt(targetBin, c);
+            if (!child || before[String(child.nodeId)]) continue;
+            var mediaPath = "";
+            try { mediaPath = String(child.getMediaPath()); } catch (ePath) {}
+            added.push({ nodeId: String(child.nodeId), name: child.name, mediaPath: mediaPath });
+          }
+          var notImported = [];
+          for (var f = 0; f < filePaths.length; f++) {
+            var found = false;
+            var wantedPath = new File(filePaths[f]).fsName;
+            for (var a = 0; a < added.length; a++) if (added[a].mediaPath && new File(added[a].mediaPath).fsName === wantedPath) { found = true; break; }
+            if (!found) notImported.push(filePaths[f]);
+          }
+          if (notImported.length) {
+            return __jsonStringify({ success: false, error: notImported.length + " file(s) produced no new project item: " + notImported.join(", "), data: { importReturned: !!importSuccess, imported: added, notImported: notImported } });
+          }
+          return __result({ imported: filePaths.length, verified: true, items: added, files: filePaths });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -82,11 +116,17 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["folder_path"],
       },
       handler: async (args: { folder_path: string }) => {
-        // SEC FORK (#729 class): same blocking-modal wedge as import_media —
-        // preflight the folder before contacting Premiere.
+        // Reject an invalid folder before contacting Premiere.
+        if (typeof args.folder_path !== "string" || !args.folder_path.trim()) {
+          return { success: false as const, error: "folder_path must be a non-empty directory path" };
+        }
         const resolvedFolder = resolve(args.folder_path);
-        if (!existsSync(resolvedFolder)) {
-          return { success: false as const, error: `Folder not found: ${resolvedFolder} — nothing was imported.` };
+        try {
+          if (!existsSync(resolvedFolder) || !statSync(resolvedFolder).isDirectory()) {
+            return { success: false as const, error: `Folder not found or not a directory: ${resolvedFolder} — nothing was imported.` };
+          }
+        } catch {
+          return { success: false as const, error: `Could not inspect folder: ${resolvedFolder} — nothing was imported.` };
         }
         const script = buildToolScript(`
           var folder = new Folder("${escapeForExtendScript(resolvedFolder)}");
@@ -243,7 +283,7 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
     },
 
     move_item_to_bin: {
-      description: "Move a project item to a different bin",
+      description: "Move a project item to a different bin and confirm where it landed",
       parameters: {
         type: "object" as const,
         properties: {
@@ -265,16 +305,21 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
           
           var targetBin = __findProjectItem("${escapeForExtendScript(args.target_bin)}");
           if (!targetBin) return __error("Target bin not found: ${escapeForExtendScript(args.target_bin)}");
+          if (!__isBinItem(targetBin)) return __error(targetBin.name + " is not a bin; nothing was moved.");
           
           item.moveBin(targetBin);
-          return __result({ moved: true, item: item.name, toBin: targetBin.name });
+          // treePath names the containing bin (live 25.2.3).
+          if (String(item.treePath) !== String(targetBin.treePath) + "\\\\" + item.name) {
+            return __error("Premiere did not move " + item.name + " into " + targetBin.name + "; it is at " + item.treePath + ".");
+          }
+          return __result({ moved: true, verified: true, item: item.name, toBin: targetBin.name });
         `);
         return sendCommand(script, bridgeOptions);
       },
     },
 
     relink_media: {
-      description: "Relink an offline media item to a new file path",
+      description: "Legacy CEP relink can block Premiere indefinitely, even for an existing file on Premiere 26.5.2. Prefer relink_offline_media_uxp, which checks capability and reads the result back. This CEP route refuses by default; allow_unsafe_cep_relink must be explicitly true to attempt it, and its result is never reported as verified.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -286,23 +331,35 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
             type: "string",
             description: "New file path for the media",
           },
+          allow_unsafe_cep_relink: {
+            type: "boolean",
+            description: "Explicitly permit the legacy CEP changeMediaPath call. It can wedge Premiere even when the target file exists; prefer relink_offline_media_uxp.",
+          },
         },
         required: ["item_id", "new_path"],
       },
-      handler: async (args: { item_id: string; new_path: string }) => {
-        // SEC FORK (#729): changeMediaPath with a missing file wedges the CEP
-        // bridge (same blocking-modal class as import_media #713) — preflight
-        // the path and hand the host native separators.
-        const resolvedPath = resolve(args.new_path);
-        if (!existsSync(resolvedPath)) {
-          return { success: false as const, error: `Relink target not found: ${resolvedPath} — nothing was sent to Premiere. changeMediaPath with a missing file opens a blocking dialog.` };
+      handler: async (args: { item_id: string; new_path: string; allow_unsafe_cep_relink?: boolean }) => {
+        if (args.allow_unsafe_cep_relink !== true) {
+          return { success: false as const, error: "CEP relink_media is disabled by default because changeMediaPath can block Premiere indefinitely on a valid path (#729). Use relink_offline_media_uxp, or explicitly set allow_unsafe_cep_relink: true if you accept that host risk." };
+        }
+        if (!args.new_path || !args.new_path.trim()) {
+          return { success: false as const, error: "new_path must be a non-empty file path." };
+        }
+        const path = resolve(args.new_path);
+        try {
+          if (!existsSync(path) || !statSync(path).isFile()) {
+            return { success: false as const, error: `Relink target is not an existing file: ${path}. Nothing was sent to Premiere.` };
+          }
+        } catch {
+          return { success: false as const, error: `Relink target could not be inspected: ${path}. Nothing was sent to Premiere.` };
         }
         const script = buildToolScript(`
           var item = __findProjectItem("${escapeForExtendScript(args.item_id)}");
           if (!item) return __error("Item not found: ${escapeForExtendScript(args.item_id)}");
           
-          var success = item.changeMediaPath("${escapeForExtendScript(resolvedPath)}", true);
-          return __result({ relinked: success, item: item.name, newPath: "${escapeForExtendScript(resolvedPath)}" });
+          var success = item.changeMediaPath("${escapeForExtendScript(path)}", true);
+          if (success !== true && success !== 0) return __error("Premiere did not confirm the CEP relink. The item may have changed; inspect it before continuing and do not retry automatically.", { outcome: "committed_unverified", item: item.name, newPath: "${escapeForExtendScript(path)}" });
+          return __result({ relinked: true, outcome: "committed_unverified", verified: false, item: item.name, newPath: "${escapeForExtendScript(path)}", warning: "Legacy CEP relink has no path/online readback here. Inspect the item before continuing; do not retry automatically." });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -482,7 +539,7 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
     },
 
     set_override_frame_rate: {
-      description: "Override the frame rate of a project item (useful for image sequences or misinterpreted media)",
+      description: "Override the frame rate of a project item (useful for image sequences or misinterpreted media) and read it back",
       parameters: {
         type: "object" as const,
         properties: {
@@ -498,18 +555,27 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["item_id", "frame_rate"],
       },
       handler: async (args: { item_id: string; frame_rate: number }) => {
+        // A rate of 0 reset an item to ~0 fps on Premiere 25.2.
+        if (typeof args.frame_rate !== "number" || !Number.isFinite(args.frame_rate) || args.frame_rate <= 0) {
+          return { success: false, error: "frame_rate must be a positive number." };
+        }
         const script = buildToolScript(`
           var item = __findProjectItem("${escapeForExtendScript(args.item_id)}");
           if (!item) return __error("Item not found");
           item.setOverrideFrameRate(${args.frame_rate});
-          return __result({ set: true, item: item.name, frameRate: ${args.frame_rate} });
+          var interp = null;
+          try { interp = item.getFootageInterpretation(); } catch (eRead) {}
+          var observed = interp && typeof interp.frameRate === "number" ? interp.frameRate : NaN;
+          if (!isFinite(observed)) return __error("Frame rate was written but the stored interpretation is unreadable. Inspect before retrying.", { outcome: "committed_unverified", verified: false });
+          if (!(Math.abs(observed - ${args.frame_rate}) < 0.001)) return __error("Premiere's frame rate reads " + observed + " fps instead of ${args.frame_rate}.");
+          return __result({ set: true, verified: true, item: item.name, frameRate: observed });
         `);
         return sendCommand(script, bridgeOptions);
       },
     },
 
     set_override_pixel_aspect_ratio: {
-      description: "Override the pixel aspect ratio of a project item",
+      description: "Override the pixel aspect ratio of a project item and read it back",
       parameters: {
         type: "object" as const,
         properties: {
@@ -529,11 +595,19 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["item_id", "numerator", "denominator"],
       },
       handler: async (args: { item_id: string; numerator: number; denominator: number }) => {
+        if (!Number.isSafeInteger(args.numerator) || args.numerator <= 0 || !Number.isSafeInteger(args.denominator) || args.denominator <= 0) {
+          return { success: false, error: "numerator and denominator must be positive integers." };
+        }
         const script = buildToolScript(`
           var item = __findProjectItem("${escapeForExtendScript(args.item_id)}");
           if (!item) return __error("Item not found");
           item.setOverridePixelAspectRatio(${args.numerator}, ${args.denominator});
-          return __result({ set: true, item: item.name, par: "${args.numerator}:${args.denominator}" });
+          var interp = null;
+          try { interp = item.getFootageInterpretation(); } catch (eRead) {}
+          var observed = interp && typeof interp.pixelAspectRatio === "number" ? interp.pixelAspectRatio : NaN;
+          if (!isFinite(observed)) return __error("Pixel aspect was written but the stored interpretation is unreadable. Inspect before retrying.", { outcome: "committed_unverified", verified: false });
+          if (!(Math.abs(observed - ${args.numerator / args.denominator}) < 0.0001)) return __error("Premiere's pixel aspect ratio reads " + observed + " instead of ${args.numerator}:${args.denominator}.");
+          return __result({ set: true, verified: true, item: item.name, par: "${args.numerator}:${args.denominator}", pixelAspectRatio: observed });
         `);
         return sendCommand(script, bridgeOptions);
       },

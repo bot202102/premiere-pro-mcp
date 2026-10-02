@@ -13,14 +13,47 @@ const PROJECT_PANEL_METADATA_DEFAULT_CHARS = 20000;
 export function getProjectTools(bridgeOptions: BridgeOptions) {
   return {
     save_project: {
-      description: "Save the current Premiere Pro project",
+      description:
+        "Save the current Premiere Pro project to its existing path. Fails when the project has never been saved (use save_project_as) or when Premiere writes no non-empty file. Fresh disk metadata verifies a save; unchanged or unreadable metadata reports committed_unverified.",
       parameters: {},
       handler: async () => {
         const script = buildToolScript(`
           var project = app.project;
           if (!project) return __error("No project is open");
-          project.save();
-          return __result({ saved: true, name: project.name, path: project.path });
+          var projectPath = String(project.path || "");
+          if (!projectPath) {
+            return __error("This project has no saved path; use save_project_as. Premiere was not asked to save.");
+          }
+          var outputFile = new File(projectPath);
+          if (!outputFile.parent || !outputFile.parent.exists) {
+            return __error("The project directory does not exist: " + outputFile.parent + "; Premiere was not asked to save.");
+          }
+          function saveFileEvidence(file) {
+            try {
+              var exists = !!file.exists;
+              var length = file.length;
+              var stamp = null;
+              try {
+                var modified = file.modified;
+                var value = modified && typeof modified.valueOf === "function" ? modified.valueOf() : null;
+                if (typeof value === "number" && isFinite(value)) stamp = value;
+              } catch (eModified) {}
+              return { exists: exists, length: typeof length === "number" && isFinite(length) ? length : null, modified: stamp };
+            } catch (eEvidence) { return null; }
+          }
+          var beforeSave = saveFileEvidence(outputFile);
+          var saveError = null;
+          try { project.save(); } catch (eSave) { saveError = String(eSave); }
+          outputFile = new File(projectPath);
+          var afterSave = saveFileEvidence(outputFile);
+          if (saveError && (!afterSave || afterSave.length === null)) return __error("Premiere save threw: " + saveError + "; disk evidence is unreadable. Inspect before retrying.", { mutationAttempted: true, mutationOutcome: "unknown", timelineChanged: null, verified: false });
+          if (!afterSave || afterSave.length === null) return __result({ saved: null, saveRequested: true, verified: false, outcome: "committed_unverified", name: project.name, path: projectPath, warning: "Save was requested, but disk evidence is unreadable; inspect the project before retrying." });
+          if (!afterSave.exists || !(afterSave.length > 0)) {
+            return __error("Premiere did not write a non-empty project file at " + projectPath + "; inspect the project before retrying.", { mutationAttempted: true, mutationOutcome: "unknown", timelineChanged: null, verified: false });
+          }
+          var fresh = beforeSave && (!beforeSave.exists || (beforeSave.length !== null && afterSave.length !== beforeSave.length) || (beforeSave.modified !== null && afterSave.modified !== null && afterSave.modified > beforeSave.modified));
+          if (saveError && !fresh) return __error("Premiere save threw: " + saveError + "; disk evidence cannot confirm a fresh write. Inspect before retrying.", { mutationAttempted: true, mutationOutcome: "unknown", timelineChanged: null, verified: false });
+          return __result({ saved: fresh ? true : null, saveRequested: true, verified: !!fresh, outcome: fresh ? "verified" : "committed_unverified", name: project.name, path: projectPath, warning: fresh ? (saveError ? "Premiere save threw after a fresh disk write was observed: " + saveError : null) : "Save was requested, but the existing file does not prove a fresh write; inspect the project before retrying." });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -28,7 +61,7 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
 
     save_project_as: {
       description:
-        "Save the current project to a new .prproj path. Premiere then has the NEW copy open and closes the original, so later edits go to the copy; the result reports both paths. Use open_project to return to the original.",
+        "Save the current project to a new .prproj path. Premiere then has the NEW copy open and closes the original, so later edits go to the copy; the result reports both paths. Fails when Premiere writes no file or leaves a pre-existing path unchanged. Use open_project to return to the original.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -52,12 +85,37 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
           if (__normProjectPath(previousPath) === __normProjectPath("${target}")) {
             return __error("That is the current project's own path; use save_project instead.");
           }
+          var outputFile = new File("${target}");
+          if (!outputFile.parent || !outputFile.parent.exists) {
+            return __error("The Save As directory does not exist: " + outputFile.parent);
+          }
+          var existedBefore = !!outputFile.exists;
+          var lengthBefore = existedBefore ? Number(outputFile.length) : -1;
+          if (existedBefore && !isFinite(lengthBefore)) return __error("Cannot read the existing output size; Save As was not attempted.");
+          function readModified(file) {
+            try {
+              var modified = file.modified;
+              var stamp = modified && typeof modified.valueOf === "function" ? modified.valueOf() : null;
+              return typeof stamp === "number" && isFinite(stamp) ? stamp : null;
+            } catch (eModified) { return null; }
+          }
+          var modifiedBefore = existedBefore ? readModified(outputFile) : null;
           project.saveAs("${target}");
-          if (!(new File("${target}")).exists) return __error("Premiere did not write ${target}; the current project is unchanged.");
+          if (!outputFile.exists || !(outputFile.length > 0)) return __error("Premiere did not write a non-empty project file at ${target}; inspect the active project before retrying.");
+          var modifiedAfter = readModified(outputFile);
+          if (existedBefore && Number(outputFile.length) === lengthBefore) {
+            if (modifiedBefore === null || modifiedAfter === null) {
+              return __error("Cannot verify a new project file at ${target}: the size is unchanged and a modification timestamp is unreadable. Inspect the active project before retrying.");
+            }
+            if (modifiedAfter === modifiedBefore) {
+              return __error("Premiere did not write a new project file at ${target} (the existing output was unchanged).");
+            }
+          }
           var activePath = app.project ? String(app.project.path || "") : "";
           var switched = __normProjectPath(activePath) === __normProjectPath("${target}");
           return __result({
             saved: true,
+            verified: true,
             path: "${target}",
             activeProjectPath: activePath,
             previousProjectPath: previousPath,
@@ -163,7 +221,7 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
     undo: {
       description:
         "EXPERIMENTAL (undocumented QE DOM: qe.project.undo / undoStackIndex). Undo the most recent Premiere project action(s) through QE, checked step by step against Premiere's undo-stack position (stackVerified; the timeline itself is not read back). Undo history is project-wide." +
-        " Only actions Premiere records are undoable: QE edits such as razor, insert, lift and extract report undoSteps (and undoStackIndex) in their results; pass that undoSteps as count to reverse exactly that call. Only CEP tool results carry undoSteps: a CEP result without it (most property, marker and keyframe writes) recorded nothing. UXP tools and workflows that send several commands are not counted, so always pass expected_undo_stack_index to make sure undo reverses the action you expect.",
+        " Only actions Premiere records are undoable: QE edits such as razor, insert, lift and extract report undoSteps (and undoStackIndex) in their results; pass that undoSteps as count to reverse exactly that call. A marker receipt with undoTracked:false recorded no undo step: calling Undo for it would reverse an earlier action. Only CEP tool results carry undoSteps; UXP tools and workflows that send several commands are not counted. Always pass expected_undo_stack_index to check the stack position, but matching position alone does not prove which action is on top. Observed marker boundaries refuse the entire request before any step unless acknowledge_untracked_markers:true explicitly permits prior non-marker actions. The barrier persists through server/helper reloads while the CEP engine remains alive; it cannot account for marker writes before observation, after an engine reset, or through UXP, the manual UI, or other clients. Matching the QE index verifies stack position only.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -171,23 +229,26 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
             type: "number",
             description: "Number of times to undo (default: 1)",
           },
+          acknowledge_untracked_markers: {
+            type: "boolean",
+            description: "Explicitly acknowledge that QE steps reverse or restore prior non-marker actions, because marker reversal is not verified. Default false; marker boundaries refuse the entire request before any step.",
+          },
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
+              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. The guard compares the position only; matching position cannot prove which action is on top.",
           },
         },
+        required: ["expected_undo_stack_index"],
       },
-      handler: async (args: { count?: number; expected_undo_stack_index?: number }) => {
+      handler: async (args: { count?: number; expected_undo_stack_index?: number; acknowledge_untracked_markers?: boolean }) => {
         const count = args.count ?? 1;
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
-        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
-        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
-          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
+        if (!Number.isInteger(guardArg) || guardArg! < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer; undo was not attempted" };
         }
         const guard = String(guardArg);
         const script = buildToolScript(`
@@ -196,13 +257,13 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
             if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
-              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("undo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+              return __jsonStringify({ success: false, error: "Premiere did not expose undoStackIndex; undo was not attempted", data: { expectedUndoStackIndex: expectedIndex } });
             }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so undo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }
           }
-          var outcome = __qeUndoSteps("undo", ${count});
+          var outcome = __qeUndoSteps("undo", ${count}, ${args.acknowledge_untracked_markers === true ? "true" : "false"});
           return __undoStepsResult(outcome, "undone");
         `);
         return sendCommand(script, bridgeOptions);
@@ -535,7 +596,8 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
           if (bin.type !== 2) return __error("Item is not a bin");
           var oldName = bin.name;
           bin.renameBin("${escapeForExtendScript(args.new_name)}");
-          return __result({ renamed: true, oldName: oldName, newName: "${escapeForExtendScript(args.new_name)}" });
+          if (String(bin.name) !== "${escapeForExtendScript(args.new_name)}") return __error("Premiere kept the bin name " + bin.name + ".");
+          return __result({ renamed: true, verified: true, oldName: oldName, newName: bin.name });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -993,7 +1055,7 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
     },
 
     set_transcode_on_ingest: {
-      description: "Enable or disable transcoding on ingest for the project",
+      description: "Request enabling or disabling project transcoding on ingest. Premiere exposes no getter for independent verification, so dispatch is reported as requested_unverified.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -1006,8 +1068,15 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
       },
       handler: async (args: { enabled: boolean }) => {
         const script = buildToolScript(`
-          app.project.setEnableTranscodeOnIngest(${args.enabled ? 1 : 0});
-          return __result({ set: true, transcodeOnIngest: ${args.enabled} });
+          if (!app.project || typeof app.project.setEnableTranscodeOnIngest !== "function") {
+            return __error("This Premiere build does not expose setEnableTranscodeOnIngest; no change was attempted.");
+          }
+          var hostReturn;
+          try { hostReturn = app.project.setEnableTranscodeOnIngest(${args.enabled ? 1 : 0}); }
+          catch (ingestError) {
+            return __error("Premiere threw while requesting transcode on ingest: " + ingestError.toString(), { outcome: "failed", mutationOutcome: "unknown", verified: false, mutationAttempted: true, requestedEnabled: ${args.enabled}, note: "The setter may have changed project state before throwing. Inspect Project Settings before retrying." });
+          }
+          return __result({ requestedEnabled: ${args.enabled}, requestSent: true, hostReturn: hostReturn, outcome: "requested_unverified", verified: false, verificationScope: "Premiere exposes no ingest-transcode getter; check Project Settings to confirm the requested state." });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1137,7 +1206,10 @@ export function getProjectTools(bridgeOptions: BridgeOptions) {
       handler: async (args: { luminance: number }) => {
         const script = buildToolScript(`
           app.project.setGraphicsWhiteLuminance(${args.luminance});
-          return __result({ set: true, graphicsWhiteLuminance: ${args.luminance} });
+          var observed = null;
+          try { observed = app.project.getGraphicsWhiteLuminance(); } catch (eRead) {}
+          if (observed !== ${args.luminance}) return __error("Premiere's graphics white luminance reads " + observed + " instead of ${args.luminance}.");
+          return __result({ set: true, verified: true, graphicsWhiteLuminance: observed });
         `);
         return sendCommand(script, bridgeOptions);
       },

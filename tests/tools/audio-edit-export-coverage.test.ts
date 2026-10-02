@@ -28,6 +28,7 @@ vi.mock("../../src/bridge/file-bridge.js", () => ({
 import { sendCommand } from "../../src/bridge/file-bridge.js";
 import { getAudioTools } from "../../src/tools/audio.js";
 import { confirmationToken, getEditPlanTools, validateEditPlan } from "../../src/tools/edit-plans.js";
+import { staticEditPlanTokenStore, fixtureEditPlanBinding } from "../helpers/static-edit-plan-token-store.js";
 import {
   getExportTools,
   inspectExportPresetFile,
@@ -149,11 +150,13 @@ describe("audio tool analysis coverage", () => {
     // Premiere's Volume > Level uses +15 dB as its normalized maximum.
     expect(mockedSendCommand.mock.calls.at(-1)?.[0]).toContain("0.08912509381337455");
 
-    await tools.add_audio_keyframes.handler({
+    const callsBefore = mockedSendCommand.mock.calls.length;
+    const underflow = await tools.add_audio_keyframes.handler({
       node_id: "clip",
-      keyframes: [{ time_seconds: 1.25, level_db: -Infinity }],
+      keyframes: [{ time_seconds: 1.25, level_db: -7000 }],
     });
-    expect(mockedSendCommand.mock.calls.at(-1)?.[0]).toContain("1e-7");
+    expect(underflow.success).toBe(false);
+    expect(mockedSendCommand.mock.calls.length).toBe(callsBefore);
 
     await tools.mute_track.handler({ track_index: 3, muted: false });
     expect(mockedSendCommand.mock.calls.at(-1)?.[0]).toContain("track.setMute(0)");
@@ -185,8 +188,10 @@ describe("edit plan validation and apply coverage", () => {
     const tools = getEditPlanTools(bridgeOptions, {
       capabilities: { capabilities: new Set(["inspect"]), source: "explicit" },
       operationIdFactory: () => "preview-mixed",
+      tokenStore: staticEditPlanTokenStore,
     });
 
+    mockedSendCommand.mockResolvedValueOnce({ success: true, data: { targetsValidated: true, hostBinding: fixtureEditPlanBinding(plan) } });
     const result = await tools.preview_edit_plan.handler({ plan });
     expect(result).toMatchObject({
       success: true,
@@ -216,10 +221,12 @@ describe("edit plan validation and apply coverage", () => {
       capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" },
       auditSink,
       operationIdFactory: () => "apply-remove",
+      tokenStore: staticEditPlanTokenStore,
     });
     const preview = await tools.preview_edit_plan.handler({ plan });
     const issued = (preview.data as { confirmationToken: string }).confirmationToken;
 
+    staticEditPlanTokenStore.issue(confirmationToken(plan), fixtureEditPlanBinding(plan));
     const result = await tools.apply_edit_plan.handler({
       plan,
       confirmation_token: issued,

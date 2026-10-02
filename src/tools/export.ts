@@ -685,7 +685,7 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
 
     export_sequence: {
       description:
-        "Export the active sequence directly (Premiere renders it; blocks until done) with an Adobe Media Encoder preset. The output extension must match what the preset writes (an H.264 preset in AME's QuickTime folder writes .mov); a missing extension is added. Refuses an output_path that already exists unless overwrite is true. Fails if Premiere rejects the render, and verifies a non-empty file was written (for an overwrite, that the file changed).",
+        "Export the active sequence directly (Premiere renders it; blocks until done) with an Adobe Media Encoder preset. The output extension must match what the preset writes (an H.264 preset in AME's QuickTime folder writes .mov); a missing extension is added. Refuses an output_path that already exists unless overwrite is true. Fails if Premiere rejects the render, and verifies a non-empty file was written (for an overwrite, that the file changed). range 'work_area' fails closed unless the work area is enabled and covers only part of the sequence — otherwise Premiere would encode the entire timeline.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -701,7 +701,7 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
             type: "string",
             enum: ["entire", "in_to_out", "work_area"],
             description:
-              "What to render: the entire sequence (default), the sequence in/out range (set_sequence_in_out_points), or the work area. Scripts cannot set the work area on current Premiere builds, so prefer in_to_out for a ranged export.",
+              "What to render: the entire sequence (default), the sequence in/out range (set_sequence_in_out_points), or the work area. work_area requires an enabled work area around part of the sequence; unset or full-sequence work areas are refused instead of encoding everything. Set and read back a valid work area where the host supports it, or use in_to_out for a ranged export.",
           },
           work_area_only: {
             type: "boolean",
@@ -768,9 +768,29 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
           }
           rangeStart = markIn; rangeEnd = markOut;` : ""}
           ${range === "work_area" ? `
-          var workIn = __workAreaSeconds(seq.getWorkAreaInPoint());
-          var workOut = __workAreaSeconds(seq.getWorkAreaOutPoint());
-          if (workIn !== null && workOut !== null && workOut > workIn) { rangeStart = workIn; rangeEnd = workOut; }` : ""}
+          rangeEnd = Number(seq.end) / TICKS_PER_SECOND;
+          var workAreaEnabled = null;
+          try { if (typeof seq.isWorkAreaEnabled === "function") workAreaEnabled = seq.isWorkAreaEnabled(); } catch (eWorkAreaEnabled) {}
+          if (workAreaEnabled !== true) {
+            return __error("range 'work_area' needs the work area enabled (is_work_area_enabled); nothing was exported.");
+          }
+          function readWorkAreaSeconds(value) {
+            if (typeof value !== "number" && typeof value !== "string") return null;
+            if (typeof value === "string" && !/\\S/.test(value)) return null;
+            var number = Number(value);
+            if (!isFinite(number)) return null;
+            return number > 1000000 ? number / TICKS_PER_SECOND : number;
+          }
+          var workIn = null;
+          var workOut = null;
+          try {
+            if (typeof seq.getWorkAreaInPoint === "function") workIn = readWorkAreaSeconds(seq.getWorkAreaInPoint());
+            if (typeof seq.getWorkAreaOutPoint === "function") workOut = readWorkAreaSeconds(seq.getWorkAreaOutPoint());
+          } catch (eWorkAreaBounds) {}
+          if (workIn === null || workOut === null || !isFinite(rangeEnd) || rangeEnd <= 0 || workIn < 0 || workOut <= workIn || workOut > rangeEnd || (workIn === 0 && Math.abs(workOut - rangeEnd) < 0.001)) {
+            return __error("range 'work_area' needs a work area around part of the sequence; nothing was exported. Set and read back a valid work area where supported, or use range 'in_to_out' after set_sequence_in_out_points.");
+          }
+          rangeStart = workIn; rangeEnd = workOut;` : ""}
 
           // A file already at output_path must not pass the written-file check below.
           var existing = new File(outputPath);
@@ -1204,7 +1224,7 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
 
     add_to_render_queue: {
       description:
-        "Request an Adobe Media Encoder render-queue handoff for the active sequence. Requires a saved project and an .epr preset_path. Same as Project presets are refused before Premiere is contacted because AME encodes from a scratch project copy.",
+        "Request an Adobe Media Encoder render-queue handoff for the active sequence. Requires a saved project and an .epr preset_path. Same as Project presets are refused before Premiere is contacted because AME encodes from a scratch project copy. Optional start_batch requests processing of every ready AME queue job, including unrelated jobs.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -1216,22 +1236,24 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
             type: "string",
             description: "Required path to an AME preset file (.epr). Omitting this raises an Illegal Parameter error on current Premiere hosts.",
           },
+          start_batch: {
+            type: "boolean",
+            description: "Set false to enqueue only. Default (omitted) in this fork AUTO-STARTS the ready AME queue after the handoff because 26.5.2 never processes queued jobs on its own (#687, live-verified). A successful call does not verify that any render started or completed.",
+          },
         },
         required: ["output_path", "preset_path"],
       },
-      handler: async (args: { output_path: string; preset_path?: string }) => {
+      handler: async (args: { output_path: string; preset_path?: string; start_batch?: boolean }) => {
         if (typeof args.preset_path !== "string" || !args.preset_path.trim()) {
           return {
             success: false,
             error: "preset_path is required. Pass a .epr file; omitting it falls through to an Illegal Parameter error on this host.",
           };
         }
-        // QE/AME choke on forward-slash paths here with "Unknown error exception"
-        // (#711): resolve both to native separators before embedding them.
-        const resolvedOutputPath = resolve(args.output_path);
-        const resolvedPresetPath = resolve(args.preset_path);
+        const outputPath = resolve(args.output_path);
+        const presetPath = resolve(args.preset_path);
         try {
-          inspectExportPresetFile(resolvedPresetPath);
+          inspectExportPresetFile(presetPath);
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -1247,14 +1269,15 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
             return __error("Save the Premiere project to a real .prproj path before AME handoff. Unsaved or scratch projects make Adobe Media Encoder resolve a Same as Project output token against a disposable folder.");
           }
           
-          encoder.launchEncoder();
-          
-          var outputFile = new File("${escapeForExtendScript(resolvedOutputPath)}");
+          var outputFile = new File("${escapeForExtendScript(outputPath)}");
           if (!outputFile.parent || !outputFile.parent.exists) {
-            return __error("The requested AME output directory does not exist: " + outputFile.parent);
+            return __error("The requested AME output directory does not exist: " + (outputFile.parent ? outputFile.parent.fsName : outputFile.fsName));
           }
           var outputPath = outputFile.fsName;
-          var presetPath = "${escapeForExtendScript(resolvedPresetPath)}";
+          var presetFile = new File("${escapeForExtendScript(presetPath)}");
+          if (!presetFile.exists) return __error("AME preset file does not exist: " + presetFile.fsName);
+          var presetPath = presetFile.fsName;
+          encoder.launchEncoder();
           
           var jobId = encoder.encodeSequence(
             seq,
@@ -1265,20 +1288,24 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
           );
           if (!jobId || String(jobId) === "0") return __error("Adobe Media Encoder did not queue the sequence export.");
           
-          // FORK-DIVERGENCE: automatic queue start | upstream #760 made batch
-          // start an explicit opt-in; ours auto-starts and was live-verified
-          // rendering on 26.5.2 | disposition on sync: KEEP
+          // FORK-DIVERGENCE: auto queue start unless explicitly disabled |
+          // upstream #760 default = not_requested; this fork auto-starts by
+          // default (live-verified rendering on 26.5.2, #687) and keeps
+          // upstream's start_batch:false as an explicit opt-out | KEEP
           //
-          // On Premiere 26.5.2 the queued job sits in AME's queue as "Ready"
-          // and never processes until someone presses the queue play button
-          // (observed live; see upstream #687). app.encoder.startBatch() is
-          // the documented CEP way to start the queue batch (#641/#323).
-          var batchStarted = "";
-          try {
-            app.encoder.startBatch();
-            batchStarted = "started";
-          } catch (startBatchError) {
-            batchStarted = "unavailable: " + (startBatchError && startBatchError.message ? startBatchError.message : startBatchError);
+          // On 26.5.2 a queued job sits in AME as "Ready" and never processes
+          // until the queue batch starts; app.encoder.startBatch() is the
+          // documented CEP way to start it (#641/#323).
+          var batchStartRequested = ${args.start_batch === false ? "false" : "true"};
+          var batchStartOutcome = "not_requested";
+          if (batchStartRequested) {
+            try {
+              var startBatchAccepted = app.encoder.startBatch();
+              batchStartOutcome = (startBatchAccepted === true || startBatchAccepted === 1) ? "requested" : "rejected";
+            } catch (startBatchError) {
+              batchStartOutcome = "unavailable: " + (startBatchError && startBatchError.message ? startBatchError.message : startBatchError);
+            }
+>>>>>>> upstream/main
           }
           
           return __result({
@@ -1288,8 +1315,10 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
             jobId: String(jobId),
             outputPath: outputPath,
             savedProjectPath: savedProjectPath,
-            queueBatchStart: batchStarted,
-            verificationScope: "Premiere returned an AME job ID and the queue batch was started. Output-file creation is not verified by this tool."
+            queueBatchStart: batchStartOutcome,
+            verificationScope: batchStartOutcome === "requested"
+              ? "Premiere returned an AME job ID and accepted a request to start all ready AME jobs. Batch startup and output-file creation are not verified by this tool."
+              : "Premiere returned an AME job ID. Batch startup and output-file creation are not verified by this tool."
           });
         `);
         return sendCommand(script, bridgeOptions);

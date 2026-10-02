@@ -26,7 +26,12 @@ function markerWanted(args: { name?: string; comments?: string; color?: number }
 }
 
 // Read a marker's fields back and list what differs from the request.
+// __markerUnverified collects fields Premiere would not let us read back.
 const MARKER_READBACK = `
+          var __markerUnverified = [];
+          function __markerGuid(marker) {
+            try { return marker.guid ? String(marker.guid) : null; } catch (eGuid) { return null; }
+          }
           function __markerMismatches(marker, wanted) {
             var problems = [];
             if (wanted.name !== undefined && String(marker.name) !== wanted.name) problems.push("name reads back as " + marker.name);
@@ -34,7 +39,8 @@ const MARKER_READBACK = `
             if (wanted.color !== undefined) {
               var color = null;
               try { color = marker.getColorByIndex(); } catch (eColor) {}
-              if (color !== null && Number(color) !== wanted.color) problems.push("color index reads back as " + color);
+              if (typeof color !== "number" || !isFinite(color)) __markerUnverified.push("color");
+              else if (color !== wanted.color) problems.push("color index reads back as " + color);
             }
             if (wanted.end !== undefined) {
               var end = parseFloat(marker.end.seconds);
@@ -44,10 +50,33 @@ const MARKER_READBACK = `
           }
 `;
 
+const MARKER_UNDO_RECEIPT = `
+          function __markerUndoReceipt(before, payload) {
+            var after = __readUndoIndex();
+            var barrier = __rememberMarkerUndoBarrier(after);
+            payload.qeMarkerUndoVerified = false;
+            payload.markerUndoBarrier = barrier.ok;
+            payload.markerUndoWarning = "Marker reversal through QE is not verified. The undo tools refuse to cross this marker boundary unless you acknowledge prior non-marker QE actions.";
+            if (!barrier.ok) payload.markerUndoWarning = "The marker may have changed, but the CEP engine could not update its undo barrier. Inspect marker state before using QE undo.";
+            if (before === null || after === null || after < before) {
+              payload.undoTracked = null;
+              payload.undoWarning = "Premiere's undo stack could not be verified for this marker write. Do not assume Undo would reverse the marker.";
+            } else if (after === before) {
+              payload.undoTracked = false;
+              payload.undoWarning = "Premiere did not record this marker write in its undo stack. Undo would reverse an earlier action, not this marker.";
+            } else {
+              payload.undoTracked = true;
+              payload.undoSteps = after - before;
+              payload.undoStackIndex = after;
+            }
+            return payload;
+          }
+`;
+
 export function getMarkerTools(bridgeOptions: BridgeOptions) {
   return {
     add_marker: {
-      description: "Add a marker to the active sequence or a clip and read its name, comments, color and duration back.",
+      description: "Add a marker to the active sequence or a clip and read its name, comments, color and duration back. EXPERIMENTAL (QE DOM): the receipt reports undoStackIndex movement, which does not prove QE can reverse the marker. Every marker attempt protects an engine undo boundary; undoTracked:false means the marker did not observably advance the QE index.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -73,7 +102,7 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           },
           node_id: {
             type: "string",
-            description: "Optional clip node ID to add marker to clip instead of sequence",
+            description: "Optional clip node ID to add the marker to that clip instead of the sequence. Premiere 25.2.3 timeline clips have no marker collection, so this refuses there and names the source time to use with add_marker_to_project_item.",
           },
         },
         required: ["time_seconds"],
@@ -92,19 +121,29 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
         const markerTarget = args.node_id
           ? `var clipResult = __findClip("${escapeForExtendScript(args.node_id)}");
              if (!clipResult) return __error("Clip not found");
-             var markers = clipResult.clip.markers;`
+             var markers = clipResult.clip.markers;
+             if (!markers || typeof markers.createMarker !== "function") {
+               var sourceIn = NaN, sourceSpeed = null, sourceReverse = null;
+               try {
+                 sourceIn = __ticksToSeconds(clipResult.clip.inPoint.ticks);
+                 sourceSpeed = clipResult.clip.getSpeed();
+                 sourceReverse = clipResult.clip.isSpeedReversed();
+               } catch (eIn) {}
+               if (!isFinite(sourceIn) || (sourceSpeed !== 1 && sourceSpeed !== 100) || sourceReverse !== false) return __error("Timeline clips have no marker collection on this Premiere host. Nothing was changed. Use add_marker_to_project_item after inspecting the source clock; this clip's timing or speed cannot establish a simple clip-to-source time conversion.");
+               return __error("Timeline clips have no marker collection on this Premiere host; clip markers belong to the source project item and appear on every use of that media. Nothing was changed. Use add_marker_to_project_item with the source time instead: this clip's in-point is " + sourceIn + "s, so clip time t is source time t + " + sourceIn + "s.");
+             }`
           : `var seq = app.project.activeSequence;
              if (!seq) return __error("No active sequence");
              var markers = seq.markers;`;
 
-        // FORK-DIVERGENCE: markers never move the QE undo stack (#733), so
-        // receipts declare undoRecordable:false + warning. Upstream #736 now
-        // reports the same limitation upstream-side; disposition on sync:
-        // PREFER-UPSTREAM when its receipt text is equivalent.
         const script = buildToolScript(`
           ${markerTarget}
+          ${MARKER_UNDO_RECEIPT}
           
           // createMarker() and the marker.end setter both take seconds, not ticks.
+          var markerUndoBefore = __readUndoIndex();
+          var markerBarrier = __rememberMarkerUndoBarrier(markerUndoBefore);
+          if (!markerBarrier.ok) return __error(markerBarrier.error);
           var marker = markers.createMarker(${args.time_seconds});
 
           ${args.name ? `marker.name = "${escapeForExtendScript(args.name)}";` : ""}
@@ -114,25 +153,26 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           ${MARKER_READBACK}
           var problems = __markerMismatches(marker, ${wanted});
           if (problems.length) {
-            return __jsonStringify({ success: false, error: "The marker was created at ${args.time_seconds}s, but " + problems.join("; ") + ".", data: { timelineChanged: true } });
+            return __jsonStringify({ success: false, error: "The marker was created at ${args.time_seconds}s, but " + problems.join("; ") + ".", data: __markerUndoReceipt(markerUndoBefore, { timelineChanged: true }) });
           }
-          return __result({
+          return __result(__markerUndoReceipt(markerUndoBefore, {
             added: true,
-            verified: true,
+            outcome: __markerUnverified.length ? "committed_unverified" : "verified",
+            verified: __markerUnverified.length === 0,
+            unverifiedFields: __markerUnverified,
+            guid: __markerGuid(marker),
             timeSeconds: ${args.time_seconds},
             endSeconds: parseFloat(marker.end.seconds),
             name: marker.name,
-            comments: marker.comments,
-            undoRecordable: false,
-            warning: "SEC FORK (#733): markers do not move Premiere's undo stack on this build — undo/multiple_undo will NOT reverse them. Remove markers explicitly instead."
-          });
+            comments: marker.comments
+          }));
         `);
         return sendCommand(script, bridgeOptions);
       },
     },
 
     delete_marker: {
-      description: "Delete a marker at a specific time position",
+      description: "Delete a marker at a specific time position. EXPERIMENTAL (QE DOM): the receipt reports undoStackIndex movement, which does not prove QE can reverse the marker. Every marker attempt protects an engine undo boundary; undoTracked:false means the marker did not observably advance the QE index.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -142,7 +182,7 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           },
           node_id: {
             type: "string",
-            description: "Optional clip node ID (deletes from sequence if omitted)",
+            description: "Optional clip node ID (deletes from sequence if omitted). Premiere 25.2.3 timeline clips have no marker collection, so this refuses there.",
           },
         },
         required: ["time_seconds"],
@@ -153,21 +193,35 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
         const markerTarget = args.node_id
           ? `var clipResult = __findClip("${escapeForExtendScript(args.node_id)}");
              if (!clipResult) return __error("Clip not found");
-             var markers = clipResult.clip.markers;`
+             var markers = clipResult.clip.markers;
+             if (!markers || typeof markers.getFirstMarker !== "function") {
+               var sourceIn = NaN, sourceSpeed = null, sourceReverse = null;
+               try {
+                 sourceIn = __ticksToSeconds(clipResult.clip.inPoint.ticks);
+                 sourceSpeed = clipResult.clip.getSpeed();
+                 sourceReverse = clipResult.clip.isSpeedReversed();
+               } catch (eIn) {}
+               if (!isFinite(sourceIn) || (sourceSpeed !== 1 && sourceSpeed !== 100) || sourceReverse !== false) return __error("Timeline clips have no marker collection on this Premiere host. Nothing was changed. Use add_marker_to_project_item after inspecting the source clock; this clip's timing or speed cannot establish a simple clip-to-source time conversion.");
+               return __error("Timeline clips have no marker collection on this Premiere host; clip markers belong to the source project item and appear on every use of that media. Nothing was changed. Use add_marker_to_project_item with the source time instead: this clip's in-point is " + sourceIn + "s, so clip time t is source time t + " + sourceIn + "s.");
+             }`
           : `var seq = app.project.activeSequence;
              if (!seq) return __error("No active sequence");
              var markers = seq.markers;`;
 
         const script = buildToolScript(`
           ${markerTarget}
+          ${MARKER_UNDO_RECEIPT}
           
           var targetTicks = __secondsToTicks(${args.time_seconds});
+          var markerUndoBefore = __readUndoIndex();
           var marker = markers.getFirstMarker();
           var deleted = false;
           
           while (marker) {
             var markerTicks = parseFloat(marker.start.ticks);
             if (Math.abs(markerTicks - targetTicks) < TICKS_PER_SECOND * 0.01) {
+              var markerBarrier = __rememberMarkerUndoBarrier(markerUndoBefore);
+              if (!markerBarrier.ok) return __error(markerBarrier.error);
               markers.deleteMarker(marker);
               deleted = true;
               break;
@@ -176,14 +230,14 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           }
           
           if (!deleted) return __error("No marker found at " + ${args.time_seconds} + "s");
-          return __result({ deleted: true, timeSeconds: ${args.time_seconds} });
+          return __result(__markerUndoReceipt(markerUndoBefore, { deleted: true, timeSeconds: ${args.time_seconds} }));
         `);
         return sendCommand(script, bridgeOptions);
       },
     },
 
     update_marker: {
-      description: "Update the name, comments or color of the sequence marker at a time and read them back.",
+      description: "Update the name, comments or color of the sequence marker at a time and read them back. EXPERIMENTAL (QE DOM): the receipt reports undoStackIndex movement, which does not prove QE can reverse the marker. Every marker attempt protects an engine undo boundary; undoTracked:false means the marker did not observably advance the QE index.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -204,14 +258,18 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
           if (!seq) return __error("No active sequence");
+          ${MARKER_UNDO_RECEIPT}
           
           var targetTicks = __secondsToTicks(${args.time_seconds});
+          var markerUndoBefore = __readUndoIndex();
           var marker = seq.markers.getFirstMarker();
           var found = false;
           
           while (marker) {
             var markerTicks = parseFloat(marker.start.ticks);
             if (Math.abs(markerTicks - targetTicks) < TICKS_PER_SECOND * 0.01) {
+              var markerBarrier = __rememberMarkerUndoBarrier(markerUndoBefore);
+              if (!markerBarrier.ok) return __error(markerBarrier.error);
               ${args.name ? `marker.name = "${escapeForExtendScript(args.name)}";` : ""}
               ${args.comments ? `marker.comments = "${escapeForExtendScript(args.comments)}";` : ""}
               ${args.color !== undefined ? `marker.setColorByIndex(${args.color});` : ""}
@@ -225,9 +283,18 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           ${MARKER_READBACK}
           var problems = __markerMismatches(marker, ${wanted});
           if (problems.length) {
-            return __jsonStringify({ success: false, error: "The marker at ${args.time_seconds}s changed, but " + problems.join("; ") + ".", data: { timelineChanged: true } });
+            return __jsonStringify({ success: false, error: "The marker at ${args.time_seconds}s changed, but " + problems.join("; ") + ".", data: __markerUndoReceipt(markerUndoBefore, { timelineChanged: true }) });
           }
-          return __result({ updated: true, verified: true, timeSeconds: ${args.time_seconds}, name: marker.name, comments: marker.comments, undoRecordable: false });
+          return __result(__markerUndoReceipt(markerUndoBefore, {
+            updated: true,
+            outcome: __markerUnverified.length ? "committed_unverified" : "verified",
+            verified: __markerUnverified.length === 0,
+            unverifiedFields: __markerUnverified,
+            guid: __markerGuid(marker),
+            timeSeconds: ${args.time_seconds},
+            name: marker.name,
+            comments: marker.comments
+          }));
         `);
         return sendCommand(script, bridgeOptions);
       },

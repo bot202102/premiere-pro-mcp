@@ -29,6 +29,51 @@ export function premiereLevelToDb(level: number): number | null {
 }
 
 /**
+ * ES3 lookup of a clip parameter. The component is matched by its match name
+ * (the same in every host language) or its English name; the property by its
+ * English name. Then a write helper that reads the value back, because
+ * setValue() returns true even when Premiere clamps the value (live 25.2.3:
+ * Opacity 150 stores 100, Level 2.0 stores 1.0).
+ */
+function clipParamScript(componentMatch: string, componentName: string, propertyName: string): string {
+  return `
+          function __clipParam(clip) {
+            for (var ci = 0; ci < clip.components.numItems; ci++) {
+              var component = clip.components[ci];
+              var match = "";
+              try { match = String(component.matchName || ""); } catch (eMatch) {}
+              if (match.indexOf("${componentMatch}") !== 0 && String(component.displayName) !== "${componentName}" && !("${componentMatch}" === "Internal Volume" && String(component.displayName) === "Volumen")) continue;
+              for (var pi = 0; pi < component.properties.numItems; pi++) {
+                var property = component.properties[pi];
+                if ("${componentMatch}" === "Internal Volume") {
+                  if (String(property.displayName) === "Level" || String(property.displayName) === "Nivel") return property;
+                } else if (__videoIntrinsicPropertyMatches(property, "${propertyName}")) return property;
+              }
+            }
+            return null;
+          }
+          function __setParamVerified(prop, value, tolerance) {
+            var before = null;
+            try { before = prop.getValue(); } catch (eBefore) {}
+            try { prop.setValue(value, true); } catch (eWrite) {
+              return { read: null, readable: false, changed: null, attemptedOnly: true, ok: false };
+            }
+            var read = null;
+            try { read = prop.getValue(); } catch (eRead) {}
+            var readable = typeof read === "number" && isFinite(read);
+            return { read: readable ? read : null, readable: readable, changed: readable && typeof before === "number" && isFinite(before) ? Math.abs(read - before) > tolerance : null, ok: readable && Math.abs(read - value) <= tolerance };
+          }`;
+}
+
+/** Refuse dB values Premiere's Level cannot hold instead of clamping them. */
+function volumeDbError(name: string, db: unknown): string | null {
+  if (typeof db !== "number" || !Number.isFinite(db) || db > PREMIERE_MAX_LEVEL_DB) {
+    return `${name} must be a finite value at or below +${PREMIERE_MAX_LEVEL_DB} dB (Premiere's maximum clip level).`;
+  }
+  return null;
+}
+
+/**
  * ES3 helper that reads isTargeted() for every track in a collection.
  * states[i] is true/false, or null when the host threw while reading it.
  */
@@ -278,6 +323,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
         track_index: number;
         name: string;
       }) => {
+        if (!Number.isSafeInteger(args.track_index) || args.track_index < 0) return { success: false, error: "track_index must be a non-negative integer." };
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
           if (!seq) return __error("No active sequence");
@@ -288,8 +334,11 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           var track = tracks[${args.track_index}];
           var oldName = track.name;
           track.name = "${escapeForExtendScript(args.name)}";
+          if (String(track.name) !== "${escapeForExtendScript(args.name)}") {
+            return __error("Premiere kept the track name " + track.name + " instead of the requested name.");
+          }
 
-          return __result({ oldName: oldName, newName: track.name, trackType: "${args.track_type}", trackIndex: ${args.track_index} });
+          return __result({ oldName: oldName, newName: track.name, trackType: "${args.track_type}", trackIndex: ${args.track_index}, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -549,10 +598,23 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           var item = __findProjectItem("${escapeForExtendScript(args.item_id)}");
           if (!item) return __error("Item not found");
 
-          ${clearIn ? `item.clearInPoint();` : ""}
-          ${clearOut ? `item.clearOutPoint();` : ""}
+          // A cleared In reads 0 and a cleared Out reads the full media
+          // length (live 25.2.3), so the Out can only grow.
+          function __markSeconds(time) { return time && typeof time.seconds === "number" && isFinite(time.seconds) ? time.seconds : NaN; }
+          var outBefore = __markSeconds(item.getOutPoint(4));
+          var inAfter = NaN, outAfter = NaN;
+          try {
+            ${clearIn ? `item.clearInPoint();` : ""}
+            ${clearOut ? `item.clearOutPoint();` : ""}
+            inAfter = __markSeconds(item.getInPoint(4));
+            outAfter = __markSeconds(item.getOutPoint(4));
+          } catch (markError) {
+            return __error("Mark clearing was attempted but the result could not be read. Inspect the marks before retrying.", { outcome: "committed_unverified", verified: false, marksChanged: null });
+          }
+          ${clearIn ? `if (!(Math.abs(inAfter) < 0.0005)) return __error("Premiere kept the In point at " + inAfter + "s after clearing it.");` : ""}
+          ${clearOut ? `if (!(outAfter >= outBefore - 0.0005)) return __error("Premiere moved the Out point from " + outBefore + "s to " + outAfter + "s instead of clearing it.");` : ""}
 
-          return __result({ item: item.name, clearedIn: ${clearIn}, clearedOut: ${clearOut} });
+          ${clearOut ? `return __error("Out point clearing was attempted, but its stored value does not independently prove the full media duration. Inspect the marks before retrying.", { item: item.name, clearedIn: ${clearIn}, clearedOut: false, inSeconds: inAfter, outSeconds: outAfter, outcome: "committed_unverified", verified: false, marksChanged: null });` : `return __result({ item: item.name, clearedIn: ${clearIn}, clearedOut: false, inSeconds: inAfter, outSeconds: outAfter, verified: true });`}
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -745,7 +807,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
 
     set_clip_position: {
       description:
-        "Set the Position property on a video clip's Motion effect. Values are in pixels.",
+        "Set the Position property on a video clip's Motion effect using English or measured Spanish built-in names, then read it back. Values are in pixels.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -772,9 +834,9 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           var clip = result.clip;
           var set = false;
           for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Motion") {
+            if (clip.components[i].matchName === "AE.ADBE Motion" || clip.components[i].displayName === "Motion") {
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Position") {
+                if (__videoIntrinsicPropertyMatches(clip.components[i].properties[p], "Position")) {
                   var pointProp = clip.components[i].properties[p];
                   var pointScale = __motionPointScale(pointProp, __sequenceFrameSize(app.project.activeSequence));
                   if (!pointScale) return __error("The sequence frame size is unreadable, so pixels cannot be converted to Premiere's normalized position; nothing was changed.");
@@ -799,7 +861,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
     },
 
     set_clip_scale: {
-      description: "Scale a video clip evenly through its Motion effect and read the result back. With Uniform Scale off, both Scale (height) and Scale Width are set, so the picture is not stretched; use set_scale_width_height for different values.",
+      description: "Scale a video clip evenly through its Motion effect using English or measured Spanish built-in names, and read the result back. With Uniform Scale off, both Scale (height) and Scale Width are set, so the picture is not stretched; use set_scale_width_height for different values.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -836,7 +898,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
     },
 
     set_clip_rotation: {
-      description: "Set the Rotation property on a video clip's Motion effect.",
+      description: "Set the Rotation property on a video clip's Motion effect using English or measured Spanish built-in names, then read it back.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -853,26 +915,20 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "degrees"],
       },
       handler: async (args: { node_id: string; degrees: number }) => {
+        if (typeof args.degrees !== "number" || !Number.isFinite(args.degrees)) return { success: false, error: "degrees must be a finite number." };
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");
+          ${clipParamScript("AE.ADBE Motion", "Motion", "Rotation")}
 
           var clip = result.clip;
-          var set = false;
-          for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Motion") {
-              for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Rotation") {
-                  clip.components[i].properties[p].setValue(${args.degrees}, true);
-                  set = true;
-                  break;
-                }
-              }
-              break;
-            }
+          var prop = __clipParam(clip);
+          if (!prop) return __error("This clip has no Motion > Rotation property; nothing was changed.");
+          var write = __setParamVerified(prop, ${args.degrees}, 0.001);
+          if (!write.ok) {
+            return __jsonStringify({ success: false, error: "Premiere stored Rotation " + write.read + " instead of ${args.degrees}.", data: { degrees: write.read, requestedDegrees: ${args.degrees}, timelineChanged: write.changed, outcome: write.attemptedOnly ? "failed" : (write.changed === false ? "not_applied" : "committed_unverified"), mutationAttempted: true, mutationOutcome: write.attemptedOnly ? "unknown" : undefined, verified: false } });
           }
-          if (!set) return __error("Could not set rotation");
-          return __result({ degrees: ${args.degrees}, clip: clip.name });
+          return __result({ degrees: write.read, clip: clip.name, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -934,7 +990,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
     },
 
     set_clip_opacity: {
-      description: "Set the opacity of a video clip (0-100).",
+      description: "Set the opacity of a video clip (0-100) using English or measured Spanish built-in names, then read it back.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -950,26 +1006,23 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "opacity"],
       },
       handler: async (args: { node_id: string; opacity: number }) => {
+        // Premiere clamps silently (live 25.2.3: 150 stores 100, -10 stores 0).
+        if (typeof args.opacity !== "number" || !Number.isFinite(args.opacity) || args.opacity < 0 || args.opacity > 100) {
+          return { success: false, error: "opacity must be a number from 0 to 100." };
+        }
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");
+          ${clipParamScript("AE.ADBE Opacity", "Opacity", "Opacity")}
 
           var clip = result.clip;
-          var set = false;
-          for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Opacity") {
-              for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Opacity") {
-                  clip.components[i].properties[p].setValue(${args.opacity}, true);
-                  set = true;
-                  break;
-                }
-              }
-              break;
-            }
+          var prop = __clipParam(clip);
+          if (!prop) return __error("This clip has no Opacity property; nothing was changed.");
+          var write = __setParamVerified(prop, ${args.opacity}, 0.001);
+          if (!write.ok) {
+            return __jsonStringify({ success: false, error: "Premiere stored Opacity " + write.read + " instead of ${args.opacity}.", data: { opacity: write.read, requestedOpacity: ${args.opacity}, timelineChanged: write.changed, outcome: write.attemptedOnly ? "failed" : (write.changed === false ? "not_applied" : "committed_unverified"), mutationAttempted: true, mutationOutcome: write.attemptedOnly ? "unknown" : undefined, verified: false } });
           }
-          if (!set) return __error("Could not set opacity");
-          return __result({ opacity: ${args.opacity}, clip: clip.name });
+          return __result({ opacity: write.read, clip: clip.name, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1007,11 +1060,20 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
               for (var p = 0; p < clip.components[i].properties.numItems; p++) {
                 var __pn2 = String(clip.components[i].properties[p].displayName);
                   if (__pn2 === "Level" || __pn2 === "Nivel") {
+                  // Capture the old value to distinguish silent no-ops from partial writes.
+                  var beforeLevel = null;
+                  try {
+                    var oldLevel = clip.components[i].properties[p].getValue();
+                    if (typeof oldLevel === "number" || (typeof oldLevel === "string" && oldLevel.replace(/\\s/g, "") !== "")) beforeLevel = Number(oldLevel);
+                  } catch (beforeReadError) {}
+                  if (beforeLevel === null || !isFinite(beforeLevel) || beforeLevel < 0) return __jsonStringify({ success: false, error: "Volume level could not be read before the write; nothing was changed.", data: { outcome: "not_applied", verified: false, timelineChanged: false } });
                   // normalised 0..1, NOT dB - see dbToPremiereLevel()
-                  clip.components[i].properties[p].setValue(${level}, true);
-                  // SEC FORK (#725 FAM-3): report what Premiere actually stored,
-                  // not what was requested — setValue clamps silently.
-                  appliedLevel = Number(clip.components[i].properties[p].getValue());
+                  var writeError = null;
+                  try { clip.components[i].properties[p].setValue(${level}, true); } catch (volumeWriteError) { writeError = volumeWriteError.toString(); }
+                  try {
+                    var storedLevel = clip.components[i].properties[p].getValue();
+                    if (typeof storedLevel === "number" || (typeof storedLevel === "string" && storedLevel.replace(/\\s/g, "") !== "")) appliedLevel = Number(storedLevel);
+                  } catch (readError) {}
                   set = true;
                   break;
                 }
@@ -1020,9 +1082,20 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             }
           }
           if (!set) return __error("Could not set volume - is this an audio clip?");
+          if (writeError) {
+            var readableWriteLevel = appliedLevel !== null && isFinite(appliedLevel) && appliedLevel >= 0;
+            var unchangedAfterThrow = readableWriteLevel && Math.abs(appliedLevel - beforeLevel) <= Math.max(1e-12, Math.abs(beforeLevel) * 1e-6);
+            return __jsonStringify({ success: false, error: unchangedAfterThrow ? "Volume setter threw without changing the stored level: " + writeError : "Volume write threw and may have changed the clip: " + writeError + ". Inspect before retrying.", data: { outcome: unchangedAfterThrow ? "not_applied" : "committed_unverified", verified: false, timelineChanged: unchangedAfterThrow ? false : (readableWriteLevel ? true : null), requestedVolumeDb: ${args.volume_db}, level: appliedLevel } });
+          }
+          if (appliedLevel === null || !isFinite(appliedLevel) || appliedLevel < 0) {
+            return __result({ outcome: "committed_unverified", verified: false, requestedVolumeDb: ${args.volume_db}, volumeDb: null, level: null, clip: clip.name, warning: "Premiere accepted the volume write but its stored level could not be read; inspect the clip before retrying." });
+          }
           var appliedDb = appliedLevel > 0 ? (20 * (Math.log(appliedLevel) / Math.LN10) + ${PREMIERE_MAX_LEVEL_DB}) : null;
-          var clamped = appliedLevel !== null && Math.abs(appliedLevel - ${level}) > 0.0001;
-          return __result({ volumeDb: ${args.volume_db}, level: ${level}, appliedLevel: appliedLevel, appliedDb: appliedDb, clamped: clamped, clip: clip.name });
+          if (Math.abs(appliedLevel - ${level}) > Math.max(1e-12, Math.abs(${level}) * 1e-6)) {
+            var unchanged = Math.abs(appliedLevel - beforeLevel) <= Math.max(1e-12, Math.abs(beforeLevel) * 1e-6);
+            return __jsonStringify({ success: false, error: unchanged ? "Premiere did not apply the requested volume level; the stored level is unchanged." : "Premiere stored a different volume level; inspect the clip before retrying.", data: { outcome: unchanged ? "not_applied" : "committed_unverified", verified: false, timelineChanged: !unchanged, requestedVolumeDb: ${args.volume_db}, volumeDb: appliedDb, level: appliedLevel } });
+          }
+          return __result({ outcome: "verified", verified: true, requestedVolumeDb: ${args.volume_db}, volumeDb: appliedDb, level: appliedLevel, clamped: appliedDb === null || Math.abs(appliedDb - ${args.volume_db}) > 0.001, clip: clip.name });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1098,6 +1171,12 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
         volume_db: number;
         clip_indices?: number[];
       }) => {
+        const invalid = volumeDbError("volume_db", args.volume_db);
+        if (invalid) return { success: false, error: invalid };
+        if (!Number.isSafeInteger(args.track_index) || args.track_index < 0) return { success: false, error: "track_index must be a non-negative integer." };
+        if (args.clip_indices !== undefined && (!Array.isArray(args.clip_indices) || args.clip_indices.some((index) => !Number.isSafeInteger(index) || index < 0))) {
+          return { success: false, error: "clip_indices must be non-negative integers." };
+        }
         const level = dbToPremiereLevel(args.volume_db);
         const only = Array.isArray(args.clip_indices)
           ? JSON.stringify(args.clip_indices)
@@ -1107,38 +1186,42 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           if (!seq) return __error("No active sequence");
           if (${args.track_index} >= seq.audioTracks.numTracks)
             return __error("Track index out of range");
+          ${clipParamScript("Internal Volume", "Volume", "Level")}
 
           var track = seq.audioTracks[${args.track_index}];
           var only = ${only};
           var wanted = {};
-          if (only) { for (var w = 0; w < only.length; w++) wanted[only[w]] = true; }
+          if (only) {
+            for (var w = 0; w < only.length; w++) {
+              if (only[w] >= track.clips.numItems) return __error("Clip index " + only[w] + " is out of range: the track has " + track.clips.numItems + " clip(s). Nothing was changed.");
+              wanted[only[w]] = true;
+            }
+          }
 
-          var applied = 0, skipped = 0;
+          var applied = 0, skipped = 0, mismatched = [];
           for (var c = 0; c < track.clips.numItems; c++) {
             if (only && !wanted[c]) continue;
-            var clip = track.clips[c], set = false;
-            for (var i = 0; i < clip.components.numItems; i++) {
-              var __cmB = String(clip.components[i].matchName || "");
-              if (clip.components[i].displayName !== "Volume" && clip.components[i].displayName !== "Volumen" && __cmB.indexOf("Internal Volume") !== 0) continue;
-              for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                var __pn2 = String(clip.components[i].properties[p].displayName);
-                  if (__pn2 === "Level" || __pn2 === "Nivel") {
-                  clip.components[i].properties[p].setValue(${level}, true);
-                  set = true;
-                  break;
-                }
-              }
-              break;
-            }
-            if (set) applied++; else skipped++;
+            var clip = track.clips[c];
+            var prop = __clipParam(clip);
+            if (!prop) { skipped++; continue; }
+            var write = __setParamVerified(prop, ${level}, ${level} * 0.0001 + 1e-9);
+            if (write.ok) applied++; else mismatched.push({ clipIndex: c, clip: clip.name, level: write.read });
           }
-          return __result({
+          var data = {
             trackIndex: ${args.track_index},
             volumeDb: ${args.volume_db},
             level: ${level},
             applied: applied,
-            skipped: skipped
-          });
+            skipped: skipped,
+            mismatched: mismatched,
+            verified: mismatched.length === 0
+          };
+          if (mismatched.length) {
+            data.timelineChanged = applied > 0 ? true : null;
+            data.outcome = "committed_unverified";
+            return __jsonStringify({ success: false, error: mismatched.length + " clip(s) did not read back the requested level.", data: data });
+          }
+          return __result(data);
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1255,6 +1338,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
 
           var track = tracks[${args.track_index}];
           var renamed = 0;
+          var failed = [];
           var num = ${startNum};
           var pattern = "${escapeForExtendScript(args.pattern)}";
 
@@ -1277,15 +1361,16 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             var paddedSequenceNumber = sequenceNumber;
             while (paddedSequenceNumber.length < 2) paddedSequenceNumber = "0" + paddedSequenceNumber;
             var newName = pattern.split("{n}").join(sequenceNumber).split("##").join(paddedSequenceNumber).split("{name}").join(clip.name);
-            try {
-              var qeClip = targets[t].qeClip;
-              qeClip.setName(newName);
-              renamed++;
-            } catch(e) {}
+            try { targets[t].qeClip.setName(newName); } catch(e) {}
+            if (String(clip.name) === newName) renamed++;
+            else failed.push({ clip: clip.name, wanted: newName });
             num++;
           }
 
-          return __result({ renamed: renamed, pattern: pattern });
+          if (failed.length) {
+            return __jsonStringify({ success: false, error: failed.length + " clip(s) did not take the new name.", data: { renamed: renamed, failed: failed, pattern: pattern, timelineChanged: renamed > 0 } });
+          }
+          return __result({ renamed: renamed, pattern: pattern, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1397,14 +1482,21 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           collect(seq.videoTracks);
           collect(seq.audioTracks);
 
+          if (!toRemove.length) return __error("No clips are selected; nothing was removed.");
+          var ids = [];
+          for (var n = 0; n < toRemove.length; n++) ids.push(String(toRemove[n].nodeId));
           for (var i = 0; i < toRemove.length; i++) {
-            try {
-              toRemove[i].remove(${args.ripple ? "true" : "false"}, true);
-              removed++;
-            } catch(e) {}
+            try { toRemove[i].remove(${args.ripple ? "true" : "false"}, true); } catch(e) {}
+          }
+          var remaining = [];
+          for (var r = 0; r < ids.length; r++) {
+            if (__findClip(ids[r])) remaining.push(ids[r]); else removed++;
+          }
+          if (remaining.length) {
+            return __jsonStringify({ success: false, error: remaining.length + " selected clip(s) are still on the timeline.", data: { removed: removed, remainingNodeIds: remaining, timelineChanged: removed > 0 } });
           }
 
-          return __result({ removed: removed, ripple: ${args.ripple ? "true" : "false"} });
+          return __result({ removed: removed, ripple: ${args.ripple ? "true" : "false"}, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1574,7 +1666,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
 
     redo: {
       description:
-        "EXPERIMENTAL (undocumented QE DOM: qe.project.redo / undoStackIndex). Redo the most recently undone Premiere project action(s) through QE, checked step by step against Premiere's undo-stack position (stackVerified; the timeline itself is not read back). To restore a tool call undone with undo, pass the same count.",
+        "EXPERIMENTAL (undocumented QE DOM: qe.project.redo / undoStackIndex). Redo the most recently undone Premiere project action(s) through QE, checked step by step against Premiere's undo-stack position (stackVerified; the timeline itself is not read back). To restore a tool call undone with undo, pass the same count. Observed marker boundaries refuse before any step; acknowledge_untracked_markers:true permits prior non-marker actions, without proving marker reversal.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -1582,24 +1674,26 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             type: "number",
             description: "Number of redo steps (default: 1)",
           },
+          acknowledge_untracked_markers: {
+            type: "boolean",
+            description: "Explicitly acknowledge that QE steps reverse or restore prior non-marker actions, because marker reversal is not verified. Default false; marker boundaries refuse the entire request before any step.",
+          },
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Required safety guard: the undoStackIndexAfter reported by the undo you want to redo. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if other actions were undone and redone, or new ones recorded, since, the position can match again and redo would re-apply a different action than the one you undid (a new action also clears Premiere's redo history).",
+              "Required safety guard: the undoStackIndexAfter reported by the undo you want to redo. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. The guard compares the position only; matching position cannot prove which action is on top.",
           },
         },
         required: ["expected_undo_stack_index"],
       },
-      handler: async (args: { count?: number; expected_undo_stack_index: number }) => {
+      handler: async (args: { count?: number; expected_undo_stack_index?: number; acknowledge_untracked_markers?: boolean } = {}) => {
         const count = args.count ?? 1;
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
-        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
-        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
-          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo/redo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
+        if (!Number.isInteger(guardArg) || guardArg! < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer; redo was not attempted" };
         }
         const guard = String(guardArg);
         const script = buildToolScript(`
@@ -1608,13 +1702,13 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
             if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
-              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("redo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+              return __jsonStringify({ success: false, error: "Premiere did not expose undoStackIndex; redo was not attempted", data: { expectedUndoStackIndex: expectedIndex } });
             }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so redo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }
           }
-          var outcome = __qeUndoSteps("redo", ${count});
+          var outcome = __qeUndoSteps("redo", ${count}, ${args.acknowledge_untracked_markers === true ? "true" : "false"});
           return __undoStepsResult(outcome, "redone");
         `);
         return sendCommand(script, bridgeOptions);
@@ -1623,7 +1717,7 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
 
     multiple_undo: {
       description: "EXPERIMENTAL (undocumented QE DOM: qe.project.undo / undoStackIndex). Undo several Premiere project actions through QE, checking each step against Premiere's undo-stack position (stackVerified; the timeline itself is not read back) and reporting how many were undone." +
-        " Only actions Premiere records are undoable: QE edits such as razor, insert, lift and extract report undoSteps (and undoStackIndex) in their results; pass that undoSteps as count to reverse exactly that call. Only CEP tool results carry undoSteps: a CEP result without it (most property, marker and keyframe writes) recorded nothing. UXP tools and workflows that send several commands are not counted, so always pass expected_undo_stack_index to make sure undo reverses the action you expect.",
+        " Only actions Premiere records are undoable: QE edits such as razor, insert, lift and extract report undoSteps (and undoStackIndex) in their results; pass that undoSteps as count to reverse exactly that call. A marker receipt with undoTracked:false recorded no undo step: calling Undo for it would reverse an earlier action. Only CEP tool results carry undoSteps; UXP tools and workflows that send several commands are not counted. Always pass expected_undo_stack_index to check the stack position, but matching position alone does not prove which action is on top. Observed marker boundaries refuse the entire request before any step unless acknowledge_untracked_markers:true explicitly permits prior non-marker actions. The barrier persists through server/helper reloads while the CEP engine remains alive; it cannot account for marker writes before observation, after an engine reset, or through UXP, the manual UI, or other clients. Matching the QE index verifies stack position only.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -1631,24 +1725,26 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
             type: "number",
             description: "Number of undo steps (default: 1)",
           },
+          acknowledge_untracked_markers: {
+            type: "boolean",
+            description: "Explicitly acknowledge that QE steps reverse or restore prior non-marker actions, because marker reversal is not verified. Default false; marker boundaries refuse the entire request before any step.",
+          },
           expected_undo_stack_index: {
             type: "number",
             description:
-              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. This compares the position only: if actions were undone and new ones recorded since, the position can match again and undo would reverse the newer action.",
+              "Required safety guard: the undoStackIndex a tool result reported right after the call you want to reverse. The step is refused, with nothing changed, when Premiere's undo-stack position differs from it. The guard compares the position only; matching position cannot prove which action is on top.",
           },
         },
         required: ["expected_undo_stack_index"],
       },
-      handler: async (args: { count?: number; expected_undo_stack_index: number }) => {
+      handler: async (args: { count?: number; expected_undo_stack_index?: number; acknowledge_untracked_markers?: boolean }) => {
         const count = args.count ?? 1;
         if (!Number.isInteger(count) || count < 1 || count > 100) {
           return { success: false, error: "count must be an integer from 1 through 100" };
         }
-        // SEC FORK (#725 FAM-1): the guard is required — an unguarded undo/redo
-        // can rewind the project without proving which action it reverses.
         const guardArg = args.expected_undo_stack_index;
-        if (guardArg === undefined || !Number.isInteger(guardArg) || guardArg < 0) {
-          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer: undo/redo cannot prove which action it reverses without it. Take it from the undoStackIndex in the tool result you want to reverse." };
+        if (!Number.isInteger(guardArg) || guardArg! < 0) {
+          return { success: false, error: "expected_undo_stack_index is required and must be a non-negative integer; undo was not attempted" };
         }
         const guard = String(guardArg);
         const script = buildToolScript(`
@@ -1657,13 +1753,13 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           if (expectedIndex !== null) {
             var currentIndex = __readUndoIndex();
             if (currentIndex === null || typeof currentIndex === "undefined" || isNaN(Number(currentIndex))) {
-              return __jsonStringify({ success: false, error: "This Premiere host does not expose undoStackIndex, so the expected_undo_stack_index guard cannot be verified and " + ("undo") + " was not attempted.", data: { expectedUndoStackIndex: expectedIndex } });
+              return __jsonStringify({ success: false, error: "Premiere did not expose undoStackIndex; undo was not attempted", data: { expectedUndoStackIndex: expectedIndex } });
             }
             if (currentIndex !== expectedIndex) {
               return __jsonStringify({ success: false, error: "Premiere's undo stack is at " + currentIndex + ", not the expected " + expectedIndex + ": the undo-stack position changed since that call (actions were undone or recorded), so undo was not attempted.", data: { undoStackIndex: currentIndex, expectedUndoStackIndex: expectedIndex } });
             }
           }
-          var outcome = __qeUndoSteps("undo", ${count});
+          var outcome = __qeUndoSteps("undo", ${count}, ${args.acknowledge_untracked_markers === true ? "true" : "false"});
           return __undoStepsResult(outcome, "undone");
         `);
         return sendCommand(script, bridgeOptions);
@@ -1741,18 +1837,27 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
           if (!targetBin || targetBin.type !== 2) return __error("Target bin not found: ${escapeForExtendScript(args.target_bin)}");
 
           var ids = ${idsJson};
-          var moved = 0;
+          var items = [];
+          var missing = [];
           for (var i = 0; i < ids.length; i++) {
-            var item = __findProjectItem(ids[i]);
-            if (item) {
-              try {
-                item.moveBin(targetBin);
-                moved++;
-              } catch(e) {}
-            }
+            var found = __findProjectItem(ids[i]);
+            if (found) items.push(found); else missing.push(ids[i]);
+          }
+          if (missing.length) return __error("Project item(s) not found: " + missing.join(", ") + ". Nothing was moved.");
+
+          // treePath names the containing bin (live 25.2.3: "\\Project.prproj\\Bin\\item").
+          var moved = 0;
+          var notMoved = [];
+          for (var m = 0; m < items.length; m++) {
+            try { items[m].moveBin(targetBin); } catch(e) {}
+            if (String(items[m].treePath) === String(targetBin.treePath) + "\\\\" + items[m].name) moved++;
+            else notMoved.push(items[m].name);
+          }
+          if (notMoved.length) {
+            return __jsonStringify({ success: false, error: notMoved.length + " item(s) did not move to " + targetBin.name + ": " + notMoved.join(", ") + ".", data: { moved: moved, notMoved: notMoved, total: ids.length } });
           }
 
-          return __result({ moved: moved, total: ids.length, targetBin: targetBin.name });
+          return __result({ moved: moved, total: ids.length, targetBin: targetBin.name, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -1832,26 +1937,21 @@ export function getTrackTargetingTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "uniform"],
       },
       handler: async (args: { node_id: string; uniform: boolean }) => {
+        if (typeof args.uniform !== "boolean") return { success: false, error: "uniform must be true or false." };
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");
+          ${clipParamScript("AE.ADBE Motion", "Motion", "Uniform Scale")}
 
           var clip = result.clip;
-          var set = false;
-          for (var i = 0; i < clip.components.numItems; i++) {
-            if (clip.components[i].displayName === "Motion") {
-              for (var p = 0; p < clip.components[i].properties.numItems; p++) {
-                if (clip.components[i].properties[p].displayName === "Uniform Scale") {
-                  clip.components[i].properties[p].setValue(${args.uniform}, true);
-                  set = true;
-                  break;
-                }
-              }
-              break;
-            }
-          }
-          if (!set) return __error("Uniform Scale property not found");
-          return __result({ clip: clip.name, uniformScale: ${args.uniform} });
+          var prop = __clipParam(clip);
+          if (!prop) return __error("Uniform Scale property not found");
+          prop.setValue(${args.uniform}, true);
+          var read = null;
+          try { read = prop.getValue(); } catch (eRead) {}
+          if (typeof read !== "boolean") return __error("Uniform Scale was written but the stored checkbox state is unreadable. Inspect before retrying.", { outcome: "committed_unverified", verified: false, timelineChanged: null });
+          if (read !== ${args.uniform}) return __error("Premiere kept Uniform Scale at " + read + ".");
+          return __result({ clip: clip.name, uniformScale: read, verified: true });
         `);
         return sendCommand(script, bridgeOptions);
       },
