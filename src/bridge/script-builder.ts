@@ -2472,8 +2472,13 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     return { ok: false, changed: true, error: "The clip was inserted on the named tracks but sync-locked tracks were not rippled cleanly, so the timeline is now partially desynced and needs checking. " + failures.concat(verifyProblems).join("; ") + "." };
   }
 
-  // SEC FORK (#730): fail-closed detector — a clip starting beyond everything
-  // that existed before the insert is the insertClip tail-teleport signature.
+  // SEC FORK (#730): fail-closed detector — when the insert point falls inside
+  // existing material, a clip starting beyond everything that existed before
+  // the insert is the insertClip tail-teleport signature. Inserts at or beyond
+  // prevTargetEnd (appends and gap placements) cannot split a tail, so the
+  // detector must stay disarmed there (upstream's #746 batch test caught the
+  // false positive on a gapped append).
+  var teleportPossible730 = insertTicks < prevTargetEnd - tol;
   var teleported730 = [];
   var ttDet = [videoTrack, audioTrack];
   for (var td = 0; td < ttDet.length; td++) {
@@ -2481,7 +2486,7 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     for (var cd = 0; cd < ttDet[td].clips.numItems; cd++) {
       var cDet = ttDet[td].clips[cd];
       var csDet = parseFloat(cDet.start.ticks);
-      if (csDet > prevTargetEnd + tol) teleported730.push(ttDet[td].name + " " + cd + " @ " + __ticksToSeconds(csDet) + "s");
+      if (teleportPossible730 && csDet > prevTargetEnd + tol) teleported730.push(ttDet[td].name + " " + cd + " @ " + __ticksToSeconds(csDet) + "s");
     }
   }
   if (teleported730.length) {

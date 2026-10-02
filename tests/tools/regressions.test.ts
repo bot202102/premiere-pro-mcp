@@ -1320,11 +1320,14 @@ describe("issue #238 — AME uses canonical paths and documented encodeFile posi
 
     expect(queued).toContain("var outputFile = new File");
     expect(queued).toContain("var jobId = encoder.encodeSequence");
-    // Queueing remains an unverified handoff. Batch start is opt-in because it
-    // affects every ready AME job, including jobs unrelated to this call.
+    // Queueing remains an unverified handoff. FORK-DIVERGENCE: batch start is
+    // AUTO by default (26.5.2 never processes queued jobs, #687); an explicit
+    // start_batch:false renders "if (batchStartRequested)" with false.
     expect(queued).toContain("Batch startup and output-file creation are not verified by this tool");
-    expect(queued).toContain("if (false)");
+    expect(queued).toContain("var batchStartRequested = true;");
     expect(queued).toContain("app.encoder.startBatch()");
+    const enqueueOnly = await scriptFor(exports.add_to_render_queue, { output_path: "/tmp/render.mp4", preset_path: temporaryPreset(), start_batch: false });
+    expect(enqueueOnly).toContain("var batchStartRequested = false;");
     expect(projectItem).toContain("outputFile.fsName");
     expect(projectItem).toContain("var jobId = app.encoder.encodeProjectItem");
   });

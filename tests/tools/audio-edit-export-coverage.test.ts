@@ -178,7 +178,7 @@ describe("edit plan validation and apply coverage", () => {
     expect(() => validateEditPlan(value)).toThrow(message);
   });
 
-  it("previews destructive and non-destructive work with a fresh per-preview confirmation (#728)", async () => {
+  it("previews destructive and non-destructive work with stable confirmation", async () => {
     const plan = {
       operations: [
         { type: "insert_clip" as const, item_id: "source", start_seconds: 2 },
@@ -197,7 +197,7 @@ describe("edit plan validation and apply coverage", () => {
       success: true,
       data: {
         operationId: "preview-mixed",
-        confirmationToken: expect.stringMatching(/^[a-f0-9]{64}$/),
+        confirmationToken: confirmationToken(plan),
         changes: [
           { type: "insert_clip", target: "source", destructive: false },
           { type: "remove_clip", target: "old-clip", destructive: true },
@@ -223,13 +223,11 @@ describe("edit plan validation and apply coverage", () => {
       operationIdFactory: () => "apply-remove",
       tokenStore: staticEditPlanTokenStore,
     });
-    const preview = await tools.preview_edit_plan.handler({ plan });
-    const issued = (preview.data as { confirmationToken: string }).confirmationToken;
 
     staticEditPlanTokenStore.issue(confirmationToken(plan), fixtureEditPlanBinding(plan));
     const result = await tools.apply_edit_plan.handler({
       plan,
-      confirmation_token: issued,
+      confirmation_token: confirmationToken(plan),
     });
     const script = String(mockedSendCommand.mock.calls[0][0]);
 

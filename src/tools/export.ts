@@ -1305,7 +1305,6 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
             } catch (startBatchError) {
               batchStartOutcome = "unavailable: " + (startBatchError && startBatchError.message ? startBatchError.message : startBatchError);
             }
->>>>>>> upstream/main
           }
           
           return __result({

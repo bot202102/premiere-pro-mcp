@@ -26,14 +26,26 @@ describe("AME handoff native paths", () => {
   it("passes native output and preset paths to encoder and preserves unverified handoff", async () => {
     const { preset, output, script } = await prepare();
     const seen: string[] = [];
-    const encoder = { launchEncoder: vi.fn(), encodeSequence: vi.fn(() => "job"), startBatch: vi.fn() };
+    const encoder = { launchEncoder: vi.fn(), encodeSequence: vi.fn(() => "job"), startBatch: vi.fn(() => true) };
     const sequence = { name: "Sequence" };
     function File(this: any, path: string) { seen.push(path); this.fsName = path; this.exists = true; this.parent = { exists: true, fsName: "parent" }; }
     const result = JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, { File, app: { project: { activeSequence: sequence, path: "saved.prproj" }, encoder } })));
     expect(seen).toEqual([resolve(output), resolve(preset)]);
     expect(encoder.encodeSequence).toHaveBeenCalledWith(sequence, resolve(output), resolve(preset), 0, true);
-    expect(result).toMatchObject({ success: true, data: { accepted: true, verified: false, outcome: "committed_unverified", queueBatchStart: "not_requested" } });
+    // FORK-DIVERGENCE: the fork auto-starts the batch when start_batch is
+    // omitted (upstream default is not_requested); explicit false opts out.
+    expect(result).toMatchObject({ success: true, data: { accepted: true, verified: false, outcome: "committed_unverified", queueBatchStart: "requested" } });
+    expect(encoder.startBatch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps upstream's enqueue-only behavior with an explicit start_batch:false", async () => {
+    const { script } = await prepare(false);
+    const encoder = { launchEncoder: vi.fn(), encodeSequence: vi.fn(() => "job"), startBatch: vi.fn() };
+    function File(this: any, path: string) { this.fsName = path; this.exists = true; this.parent = { exists: true, fsName: "parent" }; }
+    const result = JSON.parse(String(runInNewContext(`${getHelpersSource()}
+${script}`, { File, app: { project: { activeSequence: {}, path: "saved.prproj" }, encoder } })));
     expect(encoder.startBatch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true, data: { queueBatchStart: "not_requested" } });
   });
 
   it.each([true, 1])("starts every ready AME job only with opt-in and accepting host return %s", async accepted => {
