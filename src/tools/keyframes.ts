@@ -305,6 +305,13 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           if (!result) return __error("Clip not found");
           
           var clip = result.clip;
+          // SEC FORK (#734): keyframe times outside the clip's visible range are
+          // stored by Premiere but never render — refuse with the exact range
+          // instead of accepting silently (r5 finding: t=99 stored on a 3s clip).
+          var visibleDuration = (parseFloat(clip.end.ticks) - parseFloat(clip.start.ticks)) / TICKS_PER_SECOND;
+          if (!(isFinite(visibleDuration) && visibleDuration > 0) || ${args.time_seconds} < 0 || ${args.time_seconds} > visibleDuration) {
+            return __error("Keyframe time ${args.time_seconds}s is outside this clip's visible range (duration " + (isFinite(visibleDuration) ? visibleDuration.toFixed(3) : "unreadable") + "s); no keyframe was written.");
+          }
           var comp = null;
           for (var i = 0; i < clip.components.numItems; i++) {
             if (clip.components[i].displayName === "${escapeForExtendScript(args.effect_name)}" || clip.components[i].matchName === "${escapeForExtendScript(args.effect_name)}") {

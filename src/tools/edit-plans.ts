@@ -236,7 +236,7 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
 
   return {
     preview_edit_plan: {
-      description: "Validate and preview a compound timeline edit without changing Premiere. Returns a confirmation token required by apply_edit_plan.",
+      description: "Validate and preview a compound timeline edit without changing Premiere. Returns a confirmation token required by apply_edit_plan. Issuing a new preview for the same plan replaces its previously issued tokens (latest-wins, #725): only the newest preview's token is applicable.",
       parameters: { type: "object" as const, properties: { plan: planParameter }, required: ["plan"] },
       handler: async (args: { plan: unknown }) => {
         const operationId = nextId();

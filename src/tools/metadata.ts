@@ -286,7 +286,7 @@ export function getMetadataTools(bridgeOptions: BridgeOptions) {
           }
           var readback = __xmpPropertyString(new XMPMeta(writtenXml || "").getProperty(ns, name));
           if (readback !== requestedValue) {
-            return __error("Premiere did not return the requested field value after the write. Inspect get_metadata before retrying.");
+            return __error("Premiere did not return the requested field value after the write. If you used a bare field name (e.g. Description), retry with the fully qualified project-metadata name (e.g. Column.PropertyText.Description) — bare names are silently accepted but not stored where get_metadata reads them (#734). Inspect get_metadata before retrying.");
           }
           return __result({
             updated: true,

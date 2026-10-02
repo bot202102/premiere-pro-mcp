@@ -833,11 +833,22 @@ export function getSequenceTools(bridgeOptions: BridgeOptions) {
         required: ["preset_path"],
       },
       handler: async (args: { preset_path: string }) => {
+        // SEC FORK (#734): ExtendScript silently mishandles forward-slash
+        // preset paths (same family as #691/#711) — resolve to native
+        // separators, verify existence, and report an empty host extension as
+        // an honest error instead of a receipt missing the promised field.
+        const resolvedPreset = resolve(args.preset_path);
+        if (!existsSync(resolvedPreset)) {
+          return { success: false as const, error: `Preset file not found: ${resolvedPreset}` };
+        }
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
           if (!seq) return __error("No active sequence");
-          var ext = seq.getExportFileExtension("${escapeForExtendScript(args.preset_path)}");
-          return __result({ sequenceName: seq.name, presetPath: "${escapeForExtendScript(args.preset_path)}", extension: ext });
+          var ext = seq.getExportFileExtension("${escapeForExtendScript(resolvedPreset)}");
+          if (!ext || String(ext) === "" || String(ext) === "undefined") {
+            return __error("Premiere returned no extension for this preset (getExportFileExtension empty on this build). Try a different .epr preset.");
+          }
+          return __result({ sequenceName: seq.name, presetPath: "${escapeForExtendScript(resolvedPreset)}", extension: String(ext).replace(/^\\./, "").toLowerCase() });
         `);
         return sendCommand(script, bridgeOptions);
       },

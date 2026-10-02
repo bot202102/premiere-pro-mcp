@@ -544,3 +544,26 @@ en el receipt. **Live verificado**: insert B @3 dentro de A (0–10) → V1 =
 A' 0–3, B 3–7, cola A 7–14 — sin teleport, exactamente la semántica de la UI.
 Suite: 233 archivos / 4070 passed (incluye los tests #562 upstream con el
 pre-razor integrado).
+
+## 25. Ronda 5: endurecimiento de contrato (#733/#734) — 2026-10-02
+
+Stress-test r5 (regresión de fixes 13/14 + superficies): 8/9 fixes verdes
+adversariales (incluido el replay cross-proceso del #728 verificado contra el
+registro persistido). Hallazgos procesados:
+
+- **#733**: los markers NUNCA movieron la pila de undo en ninguna versión
+  (git-verified: sin "undoSteps" en markers.ts histórico; la descripción upstream
+  ya lo decía) — NO es regresión. **Fork**: receipts de add/update_marker ahora
+  reportan `undoRecordable: false` + warning explícito. Arquitectónico (journal
+  de markers client-side) recomendado upstream.
+- **#734-1** get_export_file_extension: resolve()+existsSync del preset y error
+  honesto cuando el host no devuelve extensión (la llamada con forward slashes
+  del agente encaja en la familia #691/#711).
+- **#734-2** set_metadata: mensaje ahora sugiere el nombre cualificado
+  (Column.PropertyText.Description).
+- **#734-3** add_keyframe: rechaza tiempos fuera del rango visible del clip
+  nombrando la duración (live: t=99 → "outside this clip's visible range
+  (duration 8.000s)"); en-rango + remove verificados en vivo.
+- **RG1b**: latest-wins documentado en la descripción de preview_edit_plan.
+- **FAM-5** import_folder/import_media: receipt `files` ya no lista carpetas
+  (solo realFiles; folders van en importedFolders).

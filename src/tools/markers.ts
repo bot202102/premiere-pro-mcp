@@ -118,7 +118,9 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
             timeSeconds: ${args.time_seconds},
             endSeconds: parseFloat(marker.end.seconds),
             name: marker.name,
-            comments: marker.comments
+            comments: marker.comments,
+            undoRecordable: false,
+            warning: "SEC FORK (#733): markers do not move Premiere's undo stack on this build — undo/multiple_undo will NOT reverse them. Remove markers explicitly instead."
           });
         `);
         return sendCommand(script, bridgeOptions);
@@ -221,7 +223,7 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
           if (problems.length) {
             return __jsonStringify({ success: false, error: "The marker at ${args.time_seconds}s changed, but " + problems.join("; ") + ".", data: { timelineChanged: true } });
           }
-          return __result({ updated: true, verified: true, timeSeconds: ${args.time_seconds}, name: marker.name, comments: marker.comments });
+          return __result({ updated: true, verified: true, timeSeconds: ${args.time_seconds}, name: marker.name, comments: marker.comments, undoRecordable: false });
         `);
         return sendCommand(script, bridgeOptions);
       },
