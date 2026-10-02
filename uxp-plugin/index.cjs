@@ -90,6 +90,11 @@ async function refreshPairing() {
     const value = JSON.parse(await entry.read());
     if (!value || value.schema !== "premiere-mcp.uxp-pairing.v1") return false;
     if (typeof value.url !== "string" || !value.url || typeof value.token !== "string" || !value.token) return false;
+    // SEC 10 (fork): the live server refreshes the file every heartbeatMs; a
+    // file 3x older than that was left behind by a dead server — ignore it and
+    // keep the current/persisted credentials instead of chasing a dead port.
+    const heartbeatMs = typeof value.heartbeatMs === "number" && value.heartbeatMs > 0 ? value.heartbeatMs : 5000;
+    if (typeof value.issuedAt !== "number" || Date.now() - value.issuedAt > heartbeatMs * 3) return false;
     const urlEl = document.getElementById("bridge-url");
     const tokenEl = document.getElementById("bridge-token");
     if (urlEl && tokenEl && (urlEl.value !== value.url || tokenEl.value !== value.token)) {
