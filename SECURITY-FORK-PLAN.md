@@ -616,3 +616,21 @@ Tests: `tests/uxp-pairing.test.ts` (4) + 3 contratos nuevos de puerto en
 `tests/entrypoints-unit.test.ts` (fallback dinámico escribe pairing; doble-fallo y
 puerto-explícito-ocupado → CEP-only). Suite 4077/0. Publicación: QUICKSTART.md +
 ccx determinista con SHA256.
+
+### 27.1 Durabilización del ciclo de vida (sync 1.18.6-20)
+
+Verificado en vivo que el transporte stdio del SDK no ve el cierre de stdin: cualquier
+cliente MCP que muera sin señal deja el server como zombi (cuatro contados en una
+sesión). Ciclo de vida durable añadido:
+
+- **Watchdog de stdin** (`src/index.ts`): `end`/`close` de stdin → shutdown + exit 0.
+  Verificado en vivo: EOF → "MCP client disconnected" → proceso muerto.
+- **Heartbeat del pairing**: el server re-escribe `uxp-pairing.json` cada 5 s
+  (`heartbeatMs: 5000` en el schema); el panel ignora ficheros con `issuedAt` más viejo
+  que 3×heartbeat (server muerto) y conserva sus credenciales actuales/persistidas.
+- **Limpieza en `process.on("exit")`** (fs síncrono, seguro en exit handlers) como
+  backstop para `process.exit` y fatals.
+- **Tree-kill en el harness** (`session-run.js`): `taskkill /T /F` con `spawnSync`
+  (el spawn asíncrono pierde la carrera contra `process.exit` — bug visto en 1c).
+
+Suite tras el sync: **4675 pasados / 0 fallos** (258 archivos; upstream creció de 234).
