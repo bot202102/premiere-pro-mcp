@@ -236,6 +236,8 @@ describe("stdio CLI entry point", () => {
   });
 
   it("checks for a newer release and updates a global npm installation", async () => {
+    process.env.PREMIERE_MCP_SEC_CHECK_UPDATE_NET = "1"; // SEC FORK: network update checks are opt-in
+    process.env.PREMIERE_MCP_SEC_ALLOW_LATEST = "1"; // SEC FORK: @latest installs are opt-in
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     mocks.fetchLatestNpmVersion.mockResolvedValueOnce(nextVersion);
     let loaded = await importCli(["--check-update"]);
@@ -262,6 +264,7 @@ describe("stdio CLI entry point", () => {
   });
 
   it("rejects conflicting update actions and leaves a current installation untouched", async () => {
+    process.env.PREMIERE_MCP_SEC_CHECK_UPDATE_NET = "1"; // SEC FORK: network update checks are opt-in
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     let loaded = await importCli(["--check-update", "--update"]);
     await expect(loaded.promise).rejects.toThrow("EXIT:1");
@@ -471,6 +474,7 @@ describe("HTTP entry point", () => {
     process.env.MCP_AUTH_TOKEN = auth;
     delete process.env.ALLOW_UNAUTHENTICATED;
     process.env.NODE_ENV = "test";
+    process.env.PREMIERE_MCP_SEC_ALLOW_HTTP = "1"; // SEC FORK: the HTTP transport is opt-in
     await import("../src/http-server.js");
     return mocks.requestHandler!;
   }
@@ -479,6 +483,7 @@ describe("HTTP entry point", () => {
     delete process.env.MCP_AUTH_TOKEN;
     delete process.env.ALLOW_UNAUTHENTICATED;
     process.env.NODE_ENV = "production";
+    process.env.PREMIERE_MCP_SEC_ALLOW_HTTP = "1"; // SEC FORK: the HTTP transport is opt-in
     process.env.MCP_OAUTH_ISSUER = "https://identity.example.com";
     process.env.MCP_OAUTH_AUDIENCE = "https://premiere.example.com/mcp";
     process.env.MCP_OAUTH_JWKS_URI = "https://identity.example.com/.well-known/jwks.json";
@@ -565,6 +570,7 @@ describe("HTTP entry point", () => {
     process.env.ALLOW_UNAUTHENTICATED = "1";
     delete process.env.MCP_AUTH_TOKEN;
     process.env.NODE_ENV = "test";
+    process.env.PREMIERE_MCP_SEC_ALLOW_HTTP = "1"; // SEC FORK: the HTTP transport is opt-in
     await import("../src/http-server.js");
     const res = response();
     await mocks.requestHandler!({ method: "POST", url: "/mcp", headers: {} }, res);
@@ -574,6 +580,7 @@ describe("HTTP entry point", () => {
   it("refuses to start without authentication or an explicit override", async () => {
     delete process.env.ALLOW_UNAUTHENTICATED;
     delete process.env.MCP_AUTH_TOKEN;
+    process.env.PREMIERE_MCP_SEC_ALLOW_HTTP = "1"; // SEC FORK: past the transport gate, the auth refusal is what this test verifies
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`EXIT:${code}`);
@@ -587,6 +594,7 @@ describe("HTTP entry point", () => {
     process.env.ALLOW_UNAUTHENTICATED = "1";
     delete process.env.MCP_AUTH_TOKEN;
     process.env.NODE_ENV = "production";
+    process.env.PREMIERE_MCP_SEC_ALLOW_HTTP = "1"; // SEC FORK: past the transport gate, the auth refusal is what this test verifies
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`EXIT:${code}`);

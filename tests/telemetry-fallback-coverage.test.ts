@@ -15,7 +15,7 @@ vi.mock("posthog-node", () => ({
 const keys = [
   "POSTHOG_API_KEY", "POSTHOG_HOST", "POSTHOG_DISTINCT_ID", "FLY_MACHINE_ID",
   "POSTHOG_ENVIRONMENT", "NODE_ENV", "FLY_REGION", "PREMIERE_MCP_TRANSPORT",
-  "npm_package_version",
+  "npm_package_version", "PREMIERE_MCP_SEC_TELEMETRY",
 ] as const;
 const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 
@@ -39,6 +39,7 @@ describe("telemetry environment fallbacks", () => {
     clearTelemetryEnvironment();
     Object.assign(process.env, {
       POSTHOG_API_KEY: "key",
+      PREMIERE_MCP_SEC_TELEMETRY: "allow", // SEC FORK: the enabled path is opt-in
       FLY_MACHINE_ID: "machine-1",
       NODE_ENV: "development",
     });
@@ -63,6 +64,7 @@ describe("telemetry environment fallbacks", () => {
   it("generates an anonymous server identity and defaults to production", async () => {
     clearTelemetryEnvironment();
     process.env.POSTHOG_API_KEY = "key";
+    process.env.PREMIERE_MCP_SEC_TELEMETRY = "allow"; // SEC FORK: the enabled path is opt-in
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { getTelemetry } = await import("../src/telemetry.js");
@@ -72,5 +74,17 @@ describe("telemetry environment fallbacks", () => {
       distinctId: expect.stringMatching(/^server-[0-9a-f-]{36}$/i),
       properties: expect.objectContaining({ environment: "production" }),
     }));
+  });
+
+  it("SEC FORK: denies telemetry by default even with an API key present", async () => {
+    clearTelemetryEnvironment();
+    process.env.POSTHOG_API_KEY = "key";
+    delete process.env.PREMIERE_MCP_SEC_TELEMETRY;
+    const { getTelemetry } = await import("../src/telemetry.js");
+    const telemetry = getTelemetry();
+    expect(telemetry.enabled).toBe(false);
+    telemetry.capture("denied");
+    expect(posthog.constructor).not.toHaveBeenCalled();
+    expect(posthog.capture).not.toHaveBeenCalled();
   });
 });
