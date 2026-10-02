@@ -514,3 +514,17 @@ bound exacto. Inyectable en tests (sin ffmpeg). Stills (sin duración) quedan si
 techo — su semántica real. `set_clips_volume` (bulk) suma el lookup localizado
 que el owner señaló en #710. Suite: 233 archivos / 4070 passed.
 Live: trim 39s y slip→6s rechazados nombrando "5.000s (ffprobe)".
+
+## 23. #728 v2 — registro de tokens cross-proceso (2026-10-01, ronda 4)
+
+El stress-test r4 encontró la regresión: el Set en-factory de la v1 era por
+PROCESO — el harness per-call (y cualquier cliente de un-proceso-por-llamada)
+nace con registro vacío. **v2**: registro persistente en
+`<bridge-temp>/edit-plan-tokens.json` + tokens con **nonce por preview**
+(sha256(planHash:uuid)) — cada preview emite token fresco; apply lo consume;
+re-preview re-arma con token NUEVO. Cap 512 entradas. Live verificado
+cross-proceso: preview(A) → apply(B) ✓ → re-apply(C) → "already been applied
+and was consumed". Además **#729 preflight**: relink_media e import_folder
+rechazan paths inexistentes antes de abrir diálogos bloqueantes (el hang de
+ruta válida bloqueada por Premiere queda documentado Adobe-side en #729).
+Suite: 233 archivos / 4070 passed.

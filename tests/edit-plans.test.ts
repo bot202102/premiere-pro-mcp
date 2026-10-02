@@ -16,7 +16,9 @@ describe("edit plans", () => {
   it("previews without contacting Premiere", async () => {
     const tools = getEditPlanTools({}, { capabilities: { capabilities: new Set(["inspect"]), source: "explicit" }, operationIdFactory: () => "preview-1" });
     const result = await tools.preview_edit_plan.handler({ plan });
-    expect(result.data).toMatchObject({ operationId: "preview-1", applied: false, confirmationToken: confirmationToken(plan) });
+    expect(result.data).toMatchObject({ operationId: "preview-1", applied: false, confirmationToken: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    // SEC #728 v2: los tokens ahora llevan nonce por preview — ya son el hash del plan
+    expect((result.data as { confirmationToken: string }).confirmationToken).not.toBe(confirmationToken(plan));
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
@@ -29,8 +31,10 @@ describe("edit plans", () => {
   it("rejects changed plans and applies an exact previewed plan in one command", async () => {
     const auditSink = vi.fn();
     const tools = getEditPlanTools({}, { capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" }, auditSink, operationIdFactory: () => "apply-2" });
-    await expect(tools.apply_edit_plan.handler({ plan: { ...plan, sequence_id: "different" }, confirmation_token: confirmationToken(plan) })).rejects.toThrow("does not match");
-    const result = await tools.apply_edit_plan.handler({ plan, confirmation_token: confirmationToken(plan) });
+    const preview = await tools.preview_edit_plan.handler({ plan });
+    const issued = (preview.data as { confirmationToken: string }).confirmationToken;
+    await expect(tools.apply_edit_plan.handler({ plan: { ...plan, sequence_id: "different" }, confirmation_token: issued })).rejects.toThrow("does not match");
+    const result = await tools.apply_edit_plan.handler({ plan, confirmation_token: issued });
     expect(result).toMatchObject({ success: true, data: { applied: true, operationId: "apply-2" } });
     expect(sendCommand).toHaveBeenCalledOnce();
     expect(auditSink).toHaveBeenCalledTimes(3);

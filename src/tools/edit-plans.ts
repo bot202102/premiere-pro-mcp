@@ -1,4 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { BridgeOptions, sendCommand } from "../bridge/file-bridge.js";
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { rippleDeleteScriptBody } from "./ripple-delete-script.js";
@@ -21,6 +24,41 @@ type InsertClip = {
 };
 
 type RemoveClip = { type: "remove_clip"; node_id: string; ripple?: boolean; include_linked?: boolean };
+
+const TOKEN_REGISTRY_MAX_ENTRIES = 512;
+
+function tokenRegistryPath(explicitTempDir?: string): string {
+  const dir = explicitTempDir ?? path.join(tmpdir(), "premiere-mcp-bridge");
+  return path.join(dir, "edit-plan-tokens.json");
+}
+
+function loadTokenRegistry(explicitTempDir?: string): Record<string, { planHash: string; issuedAt: number; consumed: boolean }> {
+  try {
+    const file = tokenRegistryPath(explicitTempDir);
+    if (!existsSync(file)) return {};
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, { planHash: string; issuedAt: number; consumed: boolean }>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {}; // an unreadable registry degrades to "no tokens issued": apply then honestly refuses with the not-issued error
+  }
+}
+
+function saveTokenRegistry(registry: Record<string, { planHash: string; issuedAt: number; consumed: boolean }>, explicitTempDir?: string): void {
+  try {
+    const entries = Object.entries(registry);
+    if (entries.length > TOKEN_REGISTRY_MAX_ENTRIES) {
+      entries.sort((a, b) => b[1].issuedAt - a[1].issuedAt);
+      for (const [issued] of entries.slice(TOKEN_REGISTRY_MAX_ENTRIES)) delete registry[issued];
+    }
+    const dir = explicitTempDir ?? path.join(tmpdir(), "premiere-mcp-bridge");
+    const file = tokenRegistryPath(explicitTempDir);
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+    writeFileSync(file, JSON.stringify(registry, null, 0), { encoding: "utf8" });
+  } catch {
+    // an unwritable registry keeps in-memory behavior only; apply still marks
+    // consumption in the in-memory copy held by the caller
+  }
+}
 
 const OPERATION_KEYS: Record<EditPlanOperation["type"], string[]> = {
   insert_clip: ["type", "item_id", "start_seconds", "video_track_index", "audio_track_index"],
@@ -166,10 +204,7 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
   const capabilities = dependencies.capabilities ?? resolveCapabilities();
   const auditSink = dependencies.auditSink ?? stderrAuditSink;
   const nextId = dependencies.operationIdFactory ?? createOperationId;
-  // SEC FORK (#725 FAM-10): confirmation tokens are single-use per server session.
-  // apply_edit_plan consumes on success; preview_edit_plan re-arms (the only way
-  // back to a consumable token is a fresh preview).
-  const consumedConfirmationTokens = new Set<string>();
+
   const planParameter = {
     type: "object",
     description:
@@ -207,10 +242,18 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
         const operationId = nextId();
         requireCapability(capabilities, "inspect", operationId);
         const plan = validateEditPlan(args.plan);
-        // SEC FORK (#725 FAM-10): re-previewing re-arms the token, so the only
-        // way back to a consumable confirmation is a fresh preview.
-        consumedConfirmationTokens.delete(confirmationToken(plan));
-        return { success: true, data: { operationId, changes: describe(plan), confirmationToken: confirmationToken(plan), applied: false } };
+        // SEC FORK (#725 FAM-10, v2): every preview issues a FRESH nonce token
+        // and persists it in the bridge temp dir, so single-use holds across
+        // server processes (per-call servers included — see #728).
+        const planHash = confirmationToken(plan);
+        const registry = loadTokenRegistry(bridgeOptions?.tempDir);
+        for (const [issued, entry] of Object.entries(registry)) {
+          if (entry.planHash === planHash) delete registry[issued]; // re-arm: fresh preview replaces older tokens for this plan
+        }
+        const token = createHash("sha256").update(planHash + ":" + randomUUID()).digest("hex");
+        registry[token] = { planHash, issuedAt: Date.now(), consumed: false };
+        saveTokenRegistry(registry, bridgeOptions?.tempDir);
+        return { success: true, data: { operationId, changes: describe(plan), confirmationToken: token, applied: false } };
       },
     },
     apply_edit_plan: {
@@ -225,15 +268,21 @@ export function getEditPlanTools(bridgeOptions: BridgeOptions, dependencies: Edi
         try {
           requireCapability(capabilities, "edit", operationId);
           const plan = validateEditPlan(args.plan);
-          const planToken = confirmationToken(plan);
-          // SEC FORK (#725 FAM-10): a confirmation token is single-use — the
-          // server's own guidance says never blindly replay one, so a consumed
-          // token cannot re-apply (including after an undo) without a fresh preview.
-          if (consumedConfirmationTokens.has(planToken)) throw new Error("This confirmation token has already been applied and was consumed; preview the edit again to obtain a fresh token");
-          if (args.confirmation_token !== planToken) throw new Error("Confirmation token does not match this edit plan; preview it again");
+          // SEC FORK (#725 FAM-10, v2): tokens are issued by preview, persisted
+          // in the bridge temp dir, and single-use — a replay cannot re-apply
+          // (even after an undo, and even across server processes) without a
+          // fresh preview.
+          const planHash = confirmationToken(plan);
+          const registry = loadTokenRegistry(bridgeOptions?.tempDir);
+          const entry = registry[args.confirmation_token];
+          if (!entry || entry.planHash !== planHash) throw new Error("Confirmation token does not match this edit plan; preview it again");
+          if (entry.consumed) throw new Error("This confirmation token has already been applied and was consumed; preview the edit again to obtain a fresh token");
           emitAudit(auditSink, { operationId, action: "apply_edit_plan", outcome: "started", details: { operationCount: plan.operations.length } });
           const result = await sendCommand(buildApplyScript(plan), bridgeOptions);
-          if (result.success) consumedConfirmationTokens.add(planToken);
+          if (result.success) {
+            entry.consumed = true;
+            saveTokenRegistry(registry, bridgeOptions?.tempDir);
+          }
           emitAudit(auditSink, { operationId, action: "apply_edit_plan", outcome: result.success ? "succeeded" : "failed" });
           return result.success ? { ...result, data: { ...(result.data as object), operationId } } : { ...result, error: `${result.error ?? "Edit plan failed"} (operation ${operationId})` };
         } catch (error) {

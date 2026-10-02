@@ -450,7 +450,8 @@ describe("issue #562 — other Sequence.insertClip callers use the same helper",
       capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" },
       operationIdFactory: () => "apply-562",
     });
-    await tools.apply_edit_plan.handler({ plan, confirmation_token: confirmationToken(plan) });
+    const preview562 = await tools.preview_edit_plan.handler({ plan });
+    await tools.apply_edit_plan.handler({ plan, confirmation_token: (preview562.data as { confirmationToken: string }).confirmationToken });
     expect(String(mockedSendCommand.mock.calls[0][0])).toContain("__insertClipHonoringSyncLock(");
 
     mockedSendCommand.mockClear();

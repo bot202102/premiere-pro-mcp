@@ -51,8 +51,12 @@ function host(options: { failing: string; recordsUndo?: boolean }) {
 }
 
 const tools = getEditPlanTools({}, { capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" }, auditSink: vi.fn(), operationIdFactory: () => "op" });
-const apply = (plan: { operations: Array<{ type: "remove_clip"; node_id: string }> }) =>
-  runWithUndoTracking(true, () => tools.apply_edit_plan.handler({ plan, confirmation_token: confirmationToken(plan) })) as Promise<Result>;
+const apply = async (plan: { operations: Array<{ type: "remove_clip"; node_id: string }> }) => {
+  // SEC #728 v2: preview issues a fresh single-use token
+  const preview = await tools.preview_edit_plan.handler({ plan });
+  const issued725 = (preview.data as { confirmationToken: string }).confirmationToken;
+  return runWithUndoTracking(true, () => tools.apply_edit_plan.handler({ plan, confirmation_token: issued725 })) as Promise<Result>;
+};
 
 describe("apply_edit_plan failure reporting", () => {
   it("returns undoSteps as data only, noting that DOM removals are not covered", async () => {
