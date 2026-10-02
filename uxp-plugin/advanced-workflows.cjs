@@ -1211,10 +1211,21 @@
       const projectId = guidString(context.project && context.project.guid), sequenceId = guidString(context.sequence && context.sequence.guid);
       if (!projectId || !sequenceId) throw commandError("UXP_INVALID_HOST_STATE", "Premiere did not provide stable project and sequence identities for the Color parameter");
       const raw = keyframeValue(await context.param.getStartValue());
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        throw commandError("UXP_PARAMETER_NOT_COLOR", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is not a color parameter (current value is scalar). Use action 'inspect'/'set_value' for scalar parameters; 'inspect_color_value' only applies to color parameters.");
+      // Premiere's UXP API may hand back color values as arrays ([r, g, b] or
+      // [r, g, b, a]) just as it returns points as [x, y]; normalize both the
+      // array and object shapes, and fail with a specific message on scalars
+      // (previously colorValue's assertObject said the misleading "args must
+      // be an object").
+      const normalized = Array.isArray(raw) && (raw.length === 3 || raw.length === 4) && raw.every((n) => typeof n === "number")
+        ? { red: raw[0], green: raw[1], blue: raw[2], alpha: raw.length === 4 ? raw[3] : 1 }
+        : raw;
+      if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
+        if (normalized === null || normalized === undefined) {
+          throw commandError("UXP_VALUE_UNAVAILABLE", "Parameter '" + context.paramName + "' (component " + context.componentId + ") did not return a readable color value through this Premiere build's API; the effect may keep its color internal. Try the effect's own parameter set or the UI.");
+        }
+        throw commandError("UXP_PARAMETER_NOT_COLOR", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is a scalar parameter, not a color parameter. Use action 'inspect'/'set_value' for scalar parameters; 'inspect_color_value' only applies to color parameters.");
       }
-      const color = colorValue(raw, "Premiere parameter start value");
+      const color = colorValue(normalized, "Premiere parameter start value");
       return {
         projectId, sequenceId, mediaType: context.mediaType, trackIndex: context.trackIndex, clipIndex: context.clipIndex,
         componentIndex: context.componentIndex, componentId: context.componentId, paramIndex: context.paramIndex,
