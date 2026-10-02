@@ -39,6 +39,7 @@ const secCheckUpdateNet = ["1", "true", "yes", "on"].includes(
 );
 const secDefaultProfileOn = (process.env.PREMIERE_MCP_SEC_DEFAULT_PROFILE ?? "1") !== "0";
 const secAutoPairingOn = (process.env.PREMIERE_MCP_SEC_AUTO_PAIRING ?? "1") !== "0";
+const PAIRING_HEARTBEAT_MS = 5000;
 
 function debugLog(message: string): void {
   if (debugEnabled) {
@@ -378,6 +379,8 @@ async function main() {
   cleanupTempDir(bridgeOptions);
 
   let uxpBridge: UxpWebSocketBridge | undefined;
+  let pairingHeartbeat: ReturnType<typeof setInterval> | undefined;
+  let shuttingDown = false;
   if (process.env.PREMIERE_UXP_TOKEN) {
     const explicitPort = process.env.PREMIERE_UXP_PORT
       ? parseInt(process.env.PREMIERE_UXP_PORT, 10)
@@ -420,13 +423,21 @@ async function main() {
     if (uxpBridge) {
       const address = uxpBridge.address();
       debugLog(`UXP bridge listening on ws://${address.host}:${address.port}${address.path}`);
-      if (secAutoPairingOn) {
+      if (secAutoPairingOn && process.env.PREMIERE_UXP_TOKEN) {
+        const pairingToken = process.env.PREMIERE_UXP_TOKEN;
+        const writePairingSnapshot = () => writePairingFiles({
+          url: `ws://${address.host}:${address.port}${address.path}`,
+          token: pairingToken,
+        }, tempDir);
         try {
-          const written = writePairingFiles({
-            url: `ws://${address.host}:${address.port}${address.path}`,
-            token: process.env.PREMIERE_UXP_TOKEN,
-          }, tempDir);
+          const written = writePairingSnapshot();
           if (written.length) debugLog(`UXP pairing file written to ${written.length} location(s)`);
+          // SEC 10 (fork): the pairing file is a liveness beacon — refresh it
+          // periodically so the panel can tell a live server from a stale file
+          // left behind by a crashed one.
+          pairingHeartbeat = setInterval(() => {
+            try { writePairingSnapshot(); } catch { /* best-effort beacon */ }
+          }, PAIRING_HEARTBEAT_MS);
         } catch (error) {
           debugLog(`UXP pairing file could not be written: ${error instanceof Error ? error.message : error}`);
         }
@@ -456,13 +467,29 @@ async function main() {
   if (protocolMode === "auto") debugLog("Server connected and ready");
 
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (pairingHeartbeat) clearInterval(pairingHeartbeat);
     if (uxpBridge) await uxpBridge.stop();
     if (secAutoPairingOn && process.env.PREMIERE_UXP_TOKEN) deleteOwnPairingFiles(tempDir);
     await serverHandle.close();
     await telemetry.shutdown();
   };
+  // SEC 10 (fork): the MCP stdio transport never watches for stdin end, so a
+  // client that dies without a signal (crash, killed console, detached pipe)
+  // used to leave this server running forever as a zombie holding the UXP
+  // bridge port and a stale pairing file. Exit when the client disappears.
+  process.stdin.once("end", () => {
+    console.error("[premiere-pro-mcp] MCP client disconnected (stdin closed); shutting down.");
+    void shutdown().finally(() => process.exit(0));
+  });
   process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
   process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+  // Backstop for every other exit path (process.exit, uncaught fatal): the
+  // delete is synchronous fs, which is safe inside "exit" handlers.
+  process.on("exit", () => {
+    if (secAutoPairingOn && process.env.PREMIERE_UXP_TOKEN) deleteOwnPairingFiles(tempDir);
+  });
 }
 
 main().catch((err) => {

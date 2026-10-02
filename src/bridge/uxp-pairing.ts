@@ -24,6 +24,8 @@ interface PairingDocument extends UxpPairingInfo {
   schema: "premiere-mcp.uxp-pairing.v1";
   pid: number;
   issuedAt: number;
+  /** How often the live server rewrites the file; 3x without a refresh = stale. */
+  heartbeatMs: number;
 }
 
 function appDataBase(): string {
@@ -70,10 +72,14 @@ function renderPairingDocument(info: UxpPairingInfo): string {
     token: info.token,
     pid: process.pid,
     issuedAt: Date.now(),
+    heartbeatMs: PAIRING_HEARTBEAT_MS,
     ...(info.serverVersion ? { serverVersion: info.serverVersion } : {}),
   };
   return JSON.stringify(document);
 }
+
+/** How often the live server refreshes the pairing file (panel staleness window = 3x). */
+export const PAIRING_HEARTBEAT_MS = 5000;
 
 /** Writes the pairing file to every candidate directory. Returns the written paths. */
 export function writePairingFiles(info: UxpPairingInfo, explicitTempDir?: string): string[] {

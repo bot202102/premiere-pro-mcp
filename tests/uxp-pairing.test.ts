@@ -51,7 +51,17 @@ describe("SEC 10: UXP pairing files", () => {
       url: "ws://127.0.0.1:12345/uxp",
       token: "t".repeat(16),
       pid: process.pid,
+      heartbeatMs: 5000,
     });
+    expect(typeof stored.issuedAt).toBe("number");
+  });
+
+  it("refreshes issuedAt on every write so the panel can detect liveness", async () => {
+    const fallback = makeTempFallback();
+    const first = JSON.parse(readFileSync(writePairingFiles({ url: "ws://127.0.0.1:1/uxp", token: "a".repeat(16) }, fallback)[0], "utf8"));
+    await new Promise((r) => setTimeout(r, 15));
+    const second = JSON.parse(readFileSync(writePairingFiles({ url: "ws://127.0.0.1:1/uxp", token: "a".repeat(16) }, fallback)[0], "utf8"));
+    expect(second.issuedAt).toBeGreaterThanOrEqual(first.issuedAt);
   });
 
   it("writes into discovered plugin folders as well as the temp fallback", () => {
