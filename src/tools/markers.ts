@@ -97,6 +97,10 @@ export function getMarkerTools(bridgeOptions: BridgeOptions) {
              if (!seq) return __error("No active sequence");
              var markers = seq.markers;`;
 
+        // FORK-DIVERGENCE: markers never move the QE undo stack (#733), so
+        // receipts declare undoRecordable:false + warning. Upstream #736 now
+        // reports the same limitation upstream-side; disposition on sync:
+        // PREFER-UPSTREAM when its receipt text is equivalent.
         const script = buildToolScript(`
           ${markerTarget}
           

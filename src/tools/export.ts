@@ -1265,6 +1265,10 @@ export function getExportTools(bridgeOptions: BridgeOptions) {
           );
           if (!jobId || String(jobId) === "0") return __error("Adobe Media Encoder did not queue the sequence export.");
           
+          // FORK-DIVERGENCE: automatic queue start | upstream #760 made batch
+          // start an explicit opt-in; ours auto-starts and was live-verified
+          // rendering on 26.5.2 | disposition on sync: KEEP
+          //
           // On Premiere 26.5.2 the queued job sits in AME's queue as "Ready"
           // and never processes until someone presses the queue play button
           // (observed live; see upstream #687). app.encoder.startBatch() is

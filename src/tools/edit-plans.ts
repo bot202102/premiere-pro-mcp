@@ -25,6 +25,10 @@ type InsertClip = {
 
 type RemoveClip = { type: "remove_clip"; node_id: string; ripple?: boolean; include_linked?: boolean };
 
+// FORK-DIVERGENCE: cross-process token registry — replay protection survives
+// server restarts because consumption state is persisted next to the bridge
+// temp dir. Upstream #742 shipped "atomic persisted token claims"; if it is
+// equivalent, prefer upstream and delete this block on sync.
 const TOKEN_REGISTRY_MAX_ENTRIES = 512;
 
 function tokenRegistryPath(explicitTempDir?: string): string {
