@@ -82,8 +82,14 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["folder_path"],
       },
       handler: async (args: { folder_path: string }) => {
+        // SEC FORK (#729 class): same blocking-modal wedge as import_media —
+        // preflight the folder before contacting Premiere.
+        const resolvedFolder = resolve(args.folder_path);
+        if (!existsSync(resolvedFolder)) {
+          return { success: false as const, error: `Folder not found: ${resolvedFolder} — nothing was imported.` };
+        }
         const script = buildToolScript(`
-          var folder = new Folder("${escapeForExtendScript(args.folder_path)}");
+          var folder = new Folder("${escapeForExtendScript(resolvedFolder)}");
           if (!folder.exists) return __error("Folder not found: ${escapeForExtendScript(args.folder_path)}");
           
           var files = folder.getFiles();
@@ -284,12 +290,19 @@ export function getMediaTools(bridgeOptions: BridgeOptions) {
         required: ["item_id", "new_path"],
       },
       handler: async (args: { item_id: string; new_path: string }) => {
+        // SEC FORK (#729): changeMediaPath with a missing file wedges the CEP
+        // bridge (same blocking-modal class as import_media #713) — preflight
+        // the path and hand the host native separators.
+        const resolvedPath = resolve(args.new_path);
+        if (!existsSync(resolvedPath)) {
+          return { success: false as const, error: `Relink target not found: ${resolvedPath} — nothing was sent to Premiere. changeMediaPath with a missing file opens a blocking dialog.` };
+        }
         const script = buildToolScript(`
           var item = __findProjectItem("${escapeForExtendScript(args.item_id)}");
           if (!item) return __error("Item not found: ${escapeForExtendScript(args.item_id)}");
           
-          var success = item.changeMediaPath("${escapeForExtendScript(args.new_path)}", true);
-          return __result({ relinked: success, item: item.name, newPath: "${escapeForExtendScript(args.new_path)}" });
+          var success = item.changeMediaPath("${escapeForExtendScript(resolvedPath)}", true);
+          return __result({ relinked: success, item: item.name, newPath: "${escapeForExtendScript(resolvedPath)}" });
         `);
         return sendCommand(script, bridgeOptions);
       },
