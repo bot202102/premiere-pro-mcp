@@ -1,2 +1,2 @@
-50d77e2f908f9ef69261e3b1bc9e6fa70afe4eb38e4e350f176d785dd69e08c4 *premiere-pro-mcp-1.18.6.tgz
-7c1fc2dcd9b825cca7f73398a72c525b93e79dcb99eee6e7dd1e67f4459d5685 *premiere-pro-mcp-uxp-1.18.6-direct.ccx
+9774ec71bea6794136fbe13f442f8ad32dfd26849a45312a007fd9896444df18 *premiere-pro-mcp-1.18.6.tgz (sec/1.18.6-19)
+8aee6b72664b8bf2f34f41a98571862070f9186c80d38c2d001f9969b8668ec6 *premiere-pro-mcp-uxp-1.18.6-direct.ccx (sec/1.18.6-19)
