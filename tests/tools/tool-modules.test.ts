@@ -697,9 +697,10 @@ describe("Tool Handler Behavior", () => {
         keyframes: [{ time_seconds: 1.5, level_db: -12 }],
       });
       const script = mockedSendCommand.mock.calls[0][0];
-      expect(script).toContain("new Time()");
-      expect(script).toContain("getValueAtTime(t)");
-      expect(script).toContain("verificationErrors");
+      expect(script).toContain("__clipKeyframeBase(clip)");
+      expect(script).toContain("offset: 381024000000");
+      expect(script).toContain("getValueAtTime(time)");
+      expect(script).toContain("audioVerify(levelProp, keys[k].time, keys[k].amplitude)");
     });
 
     it("verifies ripple delete and passes QE razor a sequence timecode", async () => {
@@ -781,7 +782,9 @@ describe("Tool Handler Behavior", () => {
       expect(clipScript).toContain("startVerified");
       expect(clipScript).toContain("endVerified");
       expect(clipScript).toContain("__newTransitionCovers(domTrack, transitionKeysBefore, clipStartTicks, frameTicks)");
-      expect(clipScript).toContain("the request was partially applied");
+      expect(clipScript).toContain('outcome: "committed_unverified"');
+      expect(clipScript).toContain("timelineChanged: true");
+      expect(clipScript).toContain("completedEdges: completedEdges");
 
       vi.clearAllMocks();
       await (tools.batch_add_transitions.handler as any)({ transition_name: "Cross Dissolve" });
@@ -1024,7 +1027,7 @@ describe("Script Generation Patterns", () => {
     expect(script).not.toContain("function __jsonStringify(obj)");
     const helpers = getHelpersSource();
     expect(helpers).toContain("function __result(data)");
-    expect(helpers).toContain("function __error(msg)");
+    expect(helpers).toContain("function __error(msg, extraData)");
     expect(helpers).toContain("TICKS_PER_SECOND");
   });
 });

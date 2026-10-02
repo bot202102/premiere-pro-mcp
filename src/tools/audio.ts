@@ -12,11 +12,38 @@ const FFMPEG_TIMEOUT_MS = 300_000;
 
 // Premiere stores Volume > Level as a normalized value, not a linear gain.
 // Its maximum value (1) represents +15 dB, so 0 dB is 10^(-15/20).
-const PREMIERE_MAX_LEVEL_DB = 15;
+export const PREMIERE_MAX_LEVEL_DB = 15;
 
-function dbToPremiereLevel(db: number): number {
+export function dbToPremiereLevel(db: number): number {
   return Math.pow(10, (db - PREMIERE_MAX_LEVEL_DB) / 20);
 }
+
+/** ES3 key storage readback shared by audio automation tools. */
+export const AUDIO_KEYFRAME_READBACK = `
+  function audioTick(value) {
+    if (typeof value !== "number" && (typeof value !== "string" || !/^[0-9]+$/.test(value))) throw new Error("Unreadable key clock");
+    var tick = Number(value);
+    if (!isFinite(tick) || tick < 0 || tick > 9007199254740991 || Math.floor(tick) !== tick) throw new Error("Unsafe key clock");
+    return tick;
+  }
+  function audioKeys(prop) {
+    var keys = prop.getKeys();
+    if (keys === 0) return [];
+    if (!keys || typeof keys.length !== "number" || !isFinite(keys.length) || keys.length < 0 || Math.floor(keys.length) !== keys.length) throw new Error("Unreadable key storage");
+    var ticks = [];
+    for (var k = 0; k < keys.length; k++) ticks.push(audioTick(keys[k].ticks));
+    return ticks;
+  }
+  function audioVerify(prop, time, expected) {
+    var ticks = audioKeys(prop);
+    var target = audioTick(time.ticks);
+    var found = false;
+    for (var k = 0; k < ticks.length; k++) if (ticks[k] === target) found = true;
+    var actual = prop.getValueAtTime(time);
+    if (!found || typeof actual !== "number" || !isFinite(actual) || Math.abs(actual - expected) > expected * 0.000001) throw new Error("Stored audio key or Level differed");
+    return actual;
+  }
+`;
 
 export interface SilenceInterval {
   start: number;
@@ -423,6 +450,7 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
           };
         }
         const normalizedLevel = dbToPremiereLevel(args.level_db);
+        if (normalizedLevel <= 0) return { success: false, error: "level_db is too small to represent as a nonzero normalized level" };
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found");
@@ -438,13 +466,21 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
                   if (__pn === "Level" || __pn === "Nivel") {
                   var levelProp = comp.properties[p];
                   var requestedLevel = ${normalizedLevel};
-                  var writeResult = levelProp.setValue(requestedLevel, true);
-                  var appliedLevel = Number(levelProp.getValue());
+                  var beforeLevel;
+                  try { beforeLevel = levelProp.getValue(); } catch (e) { return __error("Cannot read audio level; nothing was changed."); }
+                  if (typeof beforeLevel !== "number" || !isFinite(beforeLevel)) return __error("Cannot read audio level; nothing was changed.");
+                  var writeResult = null;
+                  var writeError = "";
+                  try { writeResult = levelProp.setValue(requestedLevel, true); } catch (e) { writeError = String(e); }
+                  var appliedLevel = NaN;
+                  try { var observedLevel = levelProp.getValue(); if (typeof observedLevel === "number") appliedLevel = observedLevel; } catch (e) {}
+                  var data = { verified: false, outcome: "committed_unverified", requestedLevel: requestedLevel, normalizedLevel: isFinite(appliedLevel) ? appliedLevel : null };
+                  if (isFinite(appliedLevel) && appliedLevel !== beforeLevel) data.timelineChanged = true;
                   var appliedDb = appliedLevel > 0 ? (20 * (Math.log(appliedLevel) / Math.LN10) + ${PREMIERE_MAX_LEVEL_DB}) : null;
-                  if (isNaN(appliedLevel) || Math.abs(appliedLevel - requestedLevel) > 0.0001 || appliedDb === null || Math.abs(appliedDb - ${args.level_db}) > 0.01) {
-                    return __error("Premiere did not apply the requested audio level (requested ${args.level_db} dB / normalized " + requestedLevel + ", read back " + appliedLevel + " / " + appliedDb + " dB). Effect-property writes are known to no-op on some Premiere Pro 26.3 installations.");
+                  if (writeError || !isFinite(appliedLevel) || Math.abs(appliedLevel - requestedLevel) > 0.0001 || appliedDb === null || Math.abs(appliedDb - ${args.level_db}) > 0.01) {
+                    return __jsonStringify({ success: false, error: "Premiere did not apply the requested audio level or could not confirm it. Inspect Volume > Level before retrying. " + writeError, data: data });
                   }
-                  return __result({ adjusted: true, verified: true, clipName: clip.name, levelDb: ${args.level_db}, normalizedLevel: appliedLevel, writeResult: writeResult });
+                  return __result({ adjusted: true, verified: true, outcome: "verified", clipName: clip.name, levelDb: ${args.level_db}, normalizedLevel: appliedLevel, writeResult: writeResult });
                 }
               }
             }
@@ -467,11 +503,12 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
           },
           keyframes: {
             type: "array",
+            minItems: 1,
             items: {
               type: "object",
               properties: {
-                time_seconds: { type: "number", description: "Time in seconds relative to clip start" },
-                level_db: { type: "number", description: "Audio level in dB" },
+                time_seconds: { type: "number", minimum: 0, description: "Time in seconds relative to clip start" },
+                level_db: { type: "number", maximum: 15, description: "Audio level in dB (maximum +15 dB)" },
               },
               required: ["time_seconds", "level_db"],
             },
@@ -481,28 +518,13 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "keyframes"],
       },
       handler: async (args: { node_id: string; keyframes: Array<{ time_seconds: number; level_db: number }> }) => {
-        // Premiere stores audio Level as amplitude ratio (0-1+), not dB.
-        // Convert: amp = 10^(dB/20). Clamp very low values to a small epsilon
-        // so AddKey accepts them (a true 0 sometimes silently fails).
-        const keyframeCode = args.keyframes
-          .map((kf) => {
-            const amp = Math.max(Math.pow(10, kf.level_db / 20), 0.0000001);
-            return `
-            (function() {
-              var t = new Time();
-              t.ticks = __secondsToTicks(${kf.time_seconds}).toString();
-              var wrote = false;
-              try { levelProp.addKey(t); } catch(e1) {}
-              try { levelProp.setValueAtKey(t, ${amp}, 1); wrote = true; }
-              catch(e2) { try { levelProp.setValueAtTime(t, ${amp}, 1); wrote = true; } catch(e3) {} }
-              var readBack = NaN;
-              try { readBack = Number(levelProp.getValueAtTime(t)); } catch(e4) {}
-              if (!wrote || isNaN(readBack) || Math.abs(readBack - ${amp}) > 0.0001) {
-                verificationErrors.push("${kf.time_seconds}s requested ${amp}, read back " + readBack);
-              }
-            })();`;
-          })
-          .join("\n");
+        if (!Array.isArray(args.keyframes) || args.keyframes.length === 0 || args.keyframes.some((kf) =>
+          !kf || !Number.isFinite(kf.time_seconds) || kf.time_seconds < 0 || !Number.isFinite(kf.level_db) || kf.level_db > PREMIERE_MAX_LEVEL_DB || !Number.isFinite(dbToPremiereLevel(kf.level_db)) || dbToPremiereLevel(kf.level_db) <= 0 || !Number.isSafeInteger(Math.round(kf.time_seconds * 254016000000)))) {
+          return { success: false, error: "keyframes must contain finite non-negative times and level_db must be at most +15 dB (Premiere's maximum clip level)" };
+        }
+        const offsets = args.keyframes.map((kf) => Math.round(kf.time_seconds * 254016000000));
+        if (new Set(offsets).size !== offsets.length) return { success: false, error: "keyframe times must be distinct in Premiere ticks" };
+        const plannedKeys = args.keyframes.map((kf, index) => `{ offset: ${offsets[index]}, amplitude: ${dbToPremiereLevel(kf.level_db)} }`).join(",");
 
         const script = buildToolScript(`
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
@@ -526,15 +548,35 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
           }
 
           if (!levelProp) return __error("Could not find audio Level property");
+          var base = __clipKeyframeBase(clip);
+          if (!base.ok) return __error(base.error);
+          if (${Math.max(...args.keyframes.map((kf) => kf.time_seconds))} > base.durationSeconds) return __error("Keyframe time exceeds clip duration; nothing was changed.");
 
-          var verificationErrors = [];
-          try { levelProp.setTimeVarying(true); } catch(e) {}
-          ${keyframeCode}
-
-          if (verificationErrors.length) {
-            return __error("Premiere did not apply one or more audio keyframes: " + verificationErrors.join("; ") + ". Effect-property writes are known to no-op on some Premiere Pro 26.3 installations.");
+          ${AUDIO_KEYFRAME_READBACK}
+          var keys = [${plannedKeys}];
+          try {
+            audioKeys(levelProp);
+            var inTicks = audioTick(clip.inPoint.ticks);
+            var durationTicks = audioTick(clip.end.ticks) - audioTick(clip.start.ticks);
+            for (var k = 0; k < keys.length; k++) {
+              if (keys[k].offset > durationTicks) throw new Error("Key exceeds clip duration");
+              keys[k].time = new Time();
+              keys[k].time.ticks = String(audioTick(inTicks + keys[k].offset));
+            }
+          } catch (preflightError) { return __error("Audio keyframe storage or clock could not be read; nothing was changed. " + String(preflightError)); }
+          try {
+            levelProp.setTimeVarying(true);
+            for (var k = 0; k < keys.length; k++) {
+              var key = keys[k];
+              try { levelProp.addKey(key.time); } catch (addError) {}
+              try { levelProp.setValueAtKey(key.time, key.amplitude, 1); }
+              catch (writeError) { levelProp.setValueAtTime(key.time, key.amplitude, 1); }
+            }
+            for (var k = 0; k < keys.length; k++) audioVerify(levelProp, keys[k].time, keys[k].amplitude);
+          } catch (verificationError) {
+            return __jsonStringify({ success: false, error: "Audio keyframes could not be verified; inspect the clip before retrying. " + String(verificationError), data: { outcome: "committed_unverified", verified: false, mutationAttempted: true, timelineChanged: null } });
           }
-          return __result({ keyframesAdded: ${args.keyframes.length}, verified: true, clipName: clip.name });
+          return __result({ keyframesAdded: ${args.keyframes.length}, verified: true, renderVerified: false, outcome: "verified", clipName: clip.name });
         `);
         return sendCommand(script, bridgeOptions);
       },
@@ -557,6 +599,9 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
         required: ["track_index", "muted"],
       },
       handler: async (args: { track_index: number; muted: boolean }) => {
+        if (!Number.isInteger(args.track_index) || args.track_index < 0 || typeof args.muted !== "boolean") {
+          return { success: false, error: "track_index must be a non-negative integer and muted must be a boolean" };
+        }
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
           if (!seq) return __error("No active sequence");
@@ -564,9 +609,25 @@ export function getAudioTools(bridgeOptions: BridgeOptions) {
           if (${args.track_index} >= seq.audioTracks.numTracks) return __error("Track index out of range");
 
           var track = seq.audioTracks[${args.track_index}];
-          track.setMute(${args.muted ? 1 : 0});
-
-          return __result({ trackIndex: ${args.track_index}, muted: ${args.muted}, trackName: track.name });
+          function readMute() {
+            var state = track.isMuted();
+            if (state !== true && state !== false && state !== 0 && state !== 1) throw new Error("Unknown mute state");
+            return state === true || state === 1;
+          }
+          var before;
+          try { before = readMute(); } catch (e) { return __error("Cannot read track mute state; nothing was changed."); }
+          var writeError = "";
+          try { track.setMute(${args.muted ? 1 : 0}); } catch (e) { writeError = String(e); }
+          var after = null;
+          try { after = readMute(); } catch (e) {}
+          var data = { trackIndex: ${args.track_index}, muted: after, trackName: track.name, verified: false, outcome: "committed_unverified" };
+          if (after !== null && after !== before) data.timelineChanged = true;
+          if (after !== ${args.muted} || writeError) {
+            return __jsonStringify({ success: false, error: "Track mute could not be verified. Inspect the track before retrying. " + writeError, data: data });
+          }
+          data.verified = true;
+          data.outcome = "verified";
+          return __result(data);
         `);
         return sendCommand(script, bridgeOptions);
       },

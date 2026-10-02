@@ -268,9 +268,13 @@ connector still need to be installed separately.
 
 - Node.js **20.19 or newer** on Windows or macOS.
 - Adobe Premiere Pro **2020–2026**. Keep Premiere, the CEP bridge, and your MCP client on the same computer for the recommended local setup.
-- Optional: [ffmpeg](https://ffmpeg.org/download.html) on `PATH` for `detect_silence`
-  (`brew install ffmpeg` on macOS or `winget install Gyan.FFmpeg` on Windows).
-  The production Docker image already includes it.
+- For `trim_clip` and `slip_edit`, install [FFmpeg](https://ffmpeg.org/download.html)
+  with `ffprobe` on `PATH` (`brew install ffmpeg` on macOS or
+  `winget install Gyan.FFmpeg` on Windows). These source-range edits are unavailable
+  without `ffprobe` and accessible media with readable timestamp clocks: they
+  refuse before mutation when physical source bounds cannot be verified.
+  FFmpeg also provides the optional `detect_silence` dependency. The production
+  Docker image already includes it.
 
 #### 1. Install
 
@@ -973,6 +977,10 @@ the tables below are a shorter workflow-oriented overview.
 > responses can prove parameter/structure readback only—not rendered pixels—so verify playback
 > or exported frames before delivery. On macOS, AME preset discovery scans each installed app
 > bundle's `Contents/MediaIO/systempresets`; prefer a Match Source preset for vertical projects.
+
+> **Host limits:** [The capability ledger](docs/host-api-limitations.md) distinguishes
+> unavailable APIs, unverified host requests, and property/structure readback.
+> A verified parameter or component does not establish rendered appearance.
 
 > **Verified track edits:** `add_track` and `add_tracks` validate requested counts and
 > return success only when the active sequence's track counts exactly match the request.

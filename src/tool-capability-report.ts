@@ -57,7 +57,6 @@ export interface ToolOperationalCapability {
 
 const LOCAL_TOOLS = new Set([
   "get_capabilities",
-  "preview_edit_plan",
   "create_editorial_context_pack",
   "create_editorial_plan",
   "preview_editorial_plan",
@@ -76,6 +75,21 @@ const ORCHESTRATOR_TOOLS = new Set(["apply_edit_plan", "apply_spot_workflow_plan
 export const TOOL_OPERATIONAL_OVERRIDES: Readonly<
   Record<string, ToolOperationalOverride>
 > = {
+  preview_edit_plan: {
+    backend: "CEP/ExtendScript", backends: ["cep", "extendscript"], status: "supported", minimumPremiereVersion: null,
+    authority: "inspect", verificationBoundary: "host_response", hostVerificationRequired: true,
+    notes: ["Inspects sequence, clip, project-item and effective track targets in Premiere before issuing a local confirmation token. It does not activate the sequence or mutate the project; apply revalidates targets."],
+  },
+  roll_edit: {
+    backend: "local + CEP/ExtendScript", backends: ["local", "cep", "extendscript"],
+    authority: "edit", verificationBoundary: "local_and_host_response", hostVerificationRequired: true,
+    notes: ["Also requires inspect and filesystem authority. Requires ffprobe duration evidence for every edited source; refuses unknown duration or nonunit/reversed speed before mutation."],
+  },
+  slide_edit: {
+    backend: "local + CEP/ExtendScript", backends: ["local", "cep", "extendscript"],
+    authority: "edit", verificationBoundary: "local_and_host_response", hostVerificationRequired: true,
+    notes: ["Also requires inspect and filesystem authority. Requires ffprobe duration evidence for edited sources. Post-mutation errors report committed_unverified and require timeline inspection before retrying."],
+  },
   verify_after_effects_connection: {
     backend: "CEP/ExtendScript",
     backends: ["cep", "extendscript"],

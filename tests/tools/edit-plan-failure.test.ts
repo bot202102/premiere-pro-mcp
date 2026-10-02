@@ -12,6 +12,7 @@ vi.mock("../../src/bridge/file-bridge.js", () => ({
 
 import { sendCommand } from "../../src/bridge/file-bridge.js";
 import { confirmationToken, getEditPlanTools } from "../../src/tools/edit-plans.js";
+import { staticEditPlanTokenStore } from "../helpers/static-edit-plan-token-store.js";
 
 const mockedSendCommand = vi.mocked(sendCommand);
 const TICKS = 254016000000;
@@ -26,9 +27,11 @@ function host(options: { failing: string; recordsUndo?: boolean }) {
   for (const [id, start] of [["v0", 0], ["v1", 10]] as const) {
     const clip: Record<string, unknown> = {
       nodeId: id,
+      projectItem: { nodeId: "test-source" },
       name: `shot ${id}`,
       start: { ticks: String(start * TICKS) },
       end: { ticks: String((start + 10) * TICKS) },
+      inPoint: { ticks: "0" }, outPoint: { ticks: String(10 * TICKS) },
       getLinkedItems: () => null,
       remove: () => {
         if (id === options.failing) {
@@ -44,19 +47,15 @@ function host(options: { failing: string; recordsUndo?: boolean }) {
   const clips = new Proxy({}, { get: (_t, key) => (key === "numItems" ? list.length : list[Number(key)]) });
   const seq = { sequenceID: "seq", name: "Cut", videoTracks: { numTracks: 1, 0: { clips, isLocked: () => false } }, audioTracks: { numTracks: 0 } };
   mockedSendCommand.mockImplementation(async (script: string) => JSON.parse(String(runInNewContext(`${getHelpersSource()}\n${script}`, {
-    app: { enableQE: () => {}, project: { activeSequence: seq, sequences: { numSequences: 1, 0: seq } } },
+    app: { enableQE: () => {}, project: { documentID: "test-project", activeSequence: seq, sequences: { numSequences: 1, 0: seq } } },
     qe: { project: { undoStackIndex: () => stack.index } },
   }))));
   return list;
 }
 
-const tools = getEditPlanTools({}, { capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" }, auditSink: vi.fn(), operationIdFactory: () => "op" });
-const apply = async (plan: { operations: Array<{ type: "remove_clip"; node_id: string }> }) => {
-  // SEC #728 v2: preview issues a fresh single-use token
-  const preview = await tools.preview_edit_plan.handler({ plan });
-  const issued725 = (preview.data as { confirmationToken: string }).confirmationToken;
-  return runWithUndoTracking(true, () => tools.apply_edit_plan.handler({ plan, confirmation_token: issued725 })) as Promise<Result>;
-};
+const tools = getEditPlanTools({}, { capabilities: { capabilities: new Set(["inspect", "edit"]), source: "explicit" }, auditSink: vi.fn(), operationIdFactory: () => "op", tokenStore: staticEditPlanTokenStore });
+const apply = async (plan: { operations: Array<{ type: "remove_clip"; node_id: string }> }) =>
+  { await tools.preview_edit_plan.handler({ plan }); mockedSendCommand.mockClear(); return runWithUndoTracking(true, () => tools.apply_edit_plan.handler({ plan, confirmation_token: confirmationToken(plan) })) as Promise<Result>; };
 
 describe("apply_edit_plan failure reporting", () => {
   it("returns undoSteps as data only, noting that DOM removals are not covered", async () => {
