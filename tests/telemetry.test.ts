@@ -19,7 +19,7 @@ vi.mock("posthog-node", () => ({
 const ENV_KEYS = [
   "POSTHOG_API_KEY", "POSTHOG_HOST", "POSTHOG_DISTINCT_ID", "FLY_MACHINE_ID",
   "POSTHOG_ENVIRONMENT", "NODE_ENV", "FLY_REGION", "PREMIERE_MCP_TRANSPORT",
-  "npm_package_version",
+  "npm_package_version", "PREMIERE_MCP_SEC_TELEMETRY",
 ] as const;
 const original = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -56,6 +56,7 @@ describe("telemetry", () => {
   });
 
   it("configures PostHog and merges safe common and event properties", async () => {
+    process.env.PREMIERE_MCP_SEC_TELEMETRY = "allow"; // SEC FORK: the enabled path is opt-in
     Object.assign(process.env, {
       POSTHOG_API_KEY: "test-key",
       POSTHOG_HOST: "https://example.invalid",

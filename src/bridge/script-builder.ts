@@ -1849,6 +1849,10 @@ function __insertClipHonoringSyncLock(seq, item, timeTicks, videoTrackIndex, aud
     }
   }
 
+  // FORK-DIVERGENCE: pre-razor fix for the insertClip tail-teleport quirk |
+  // upstream merged the DETECTION/report side (#731, aggregate #756) but not
+  // this repair | disposition on sync: KEEP
+  //
   // SEC FORK (#730): Premiere's Sequence.insertClip, called at a point that
   // falls INSIDE an existing clip on a target track, splits that clip but
   // moves the trimmed tail to the END of the sequence instead of right after

@@ -567,3 +567,23 @@ registro persistido). Hallazgos procesados:
 - **RG1b**: latest-wins documentado en la descripción de preview_edit_plan.
 - **FAM-5** import_folder/import_media: receipt `files` ya no lista carpetas
   (solo realFiles; folders van en importedFolders).
+
+## 26. Inventario de divergencias y monitoreo upstream (2026-10-02)
+
+El 02-10 upstream cerró nuestros 8 PRs re-implementándolos en PRs propios mergeados
+(atribución conservada) y cerró los 16 issues. El estado post-absorción del fork:
+
+- **Divergencias KEEP** (defenderlas en cada merge): startBatch automático
+  (upstream #760 lo hizo opt-in) y pre-razor #730 (upstream mergeó el reporte
+  #731/#756, no el fix).
+- **Divergencias PREFER-UPSTREAM** (tomar la de upstream si equivale): tokens
+  cross-proceso (#742), warning undoRecordable de markers (#736), bounds ffprobe
+  (#760).
+- **Divergencias SEC permanentes**: los 10 flags PREMIERE_MCP_SEC_*, pnpm
+  supply-chain, tarball pin.
+
+Inventario completo con file:line, motivación, refs upstream, puntos de quiebre a
+monitorear y runbook de sync: **`DIVERGENCIAS-Y-MONITOREO.md`** (raíz del repo).
+Los sitios de código llevan comentarios `[FORK-DIVERGENCE]` que referencia este
+contrato; ningún merge de upstream debe eliminarlos sin resolver su columna
+"Disposición" primero.

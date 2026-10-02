@@ -5,6 +5,11 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
+ * FORK-DIVERGENCE: physical media bounds via ffprobe | upstream #760 adopted
+ * the same approach ("exact ffprobe stream-clock tick bounds") | disposition
+ * on sync: PREFER-UPSTREAM when its implementation covers trim, slip and
+ * still-image handling equivalently.
+ *
  * SEC FORK (#712 review): ProjectItem.getOutPoint() is an editable source Out
  * mark, not the media's physical duration — using it as a trim/slip cap would
  * reject legitimate edits past a user-set mark. The only honest bound comes
