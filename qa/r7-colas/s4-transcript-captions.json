@@ -1,0 +1,13 @@
+[
+  {"nota": "R7-S4 — VOZ→transcript→captions 9:16. Frase fuente en media-r7/voz-texto.txt."},
+  {"wait_ms": 8000},
+  {"tool": "is_language_pack_available_uxp", "args": {"language": "es-ES"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-01-langpack.json", "nota": "si false: documentar y probar 'en-US' como contraste; captions manuales en su lugar"},
+  {"tool": "transcribe_clip_uxp", "args": {"project_item_name": "voz_es_r7.wav", "language": "es-ES", "confirm_destructive": true, "operation_id": "r7-transcribe-1"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-02-transcribe.json", "nota": "comparar contra voz-texto.txt; ≥80% palabras = VERDE"},
+  {"tool": "get_clip_transcript_uxp", "args": {"project_item_name": "voz_es_r7.wav"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-03-transcript.json", "nota": "anotar transcript_revision para el rough cut"},
+  {"tool": "search_clip_transcript_uxp", "args": {"project_item_name": "voz_es_r7.wav", "query": "subtítulos", "max_results": 5}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-04-search.json"},
+  {"tool": "create_caption_track", "args": {"item_id": "PEGAR-itemId-voz", "action": "import", "caption_format": "srt", "caption_content": "1\n00:00:00,200 --> 00:00:02,000\nHola, este es un texto de prueba\n\n2\n00:00:02,100 --> 00:00:04,500\npara la transcripción automática en español.\n", "artifact_format": "srt"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-05-caption-track.json"},
+  {"tool": "check_caption_safe_zone", "args": {"platform": "tiktok", "frame": {"width": 720, "height": 1280}, "elements": [{"type": "caption", "x": 360, "y": 1050, "width": 620, "height": 120}]}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-06-safezone.json", "nota": "elemento bajo la zona de UI de TikTok: esperar warning o fail honesto"},
+  {"tool": "build_caption_artifact", "args": {"word_timeline": "PEGAR-del-transcript-de-03", "format": "srt", "words_per_cue": 4, "max_chars_per_line": 32, "max_lines": 2, "style_preset": "bold_pop", "output_path": "C:/Users/rpach/Videos/stress4/runs/r7-captions.srt"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-07-caption-artifact.json", "nota": "si word_timeline exige otra forma, usar la del transcript real"},
+  {"tool": "plan_filler_word_removal", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-08-fillers.json", "nota": "plan CEP solo-preview; ajustar args al schema si exige node_id/transcript"},
+  {"tool": "save_project_uxp", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s4-99-save.json"}
+]

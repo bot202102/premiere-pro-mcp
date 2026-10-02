@@ -1,0 +1,13 @@
+[
+  {"nota": "R7-S3 — AUDIO de shorts: beats 120BPM exactos, ducking, loudness."},
+  {"wait_ms": 8000},
+  {"tool": "detect_beats", "args": {"media_path": "C:/Users/rpach/Videos/stress4/media-r7/musica_beats_r7.wav", "max_beats": 30}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-01-beats.json", "nota": "fixture = kick cada 0.5s; verificar período ~0.5"},
+  {"tool": "edit_timeline_uxp", "args": {"action": "insert", "project_item_id": "PEGAR-GUID-musica", "time_seconds": 0, "video_track_index": 0, "audio_track_index": 0}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-02-insert-musica.json"},
+  {"tool": "edit_timeline_uxp", "args": {"action": "insert", "project_item_id": "PEGAR-GUID-voz", "time_seconds": 0, "video_track_index": 1, "audio_track_index": 1}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-03-insert-voz.json", "nota": "voz en A2, música en A1"},
+  {"tool": "apply_beat_markers_uxp", "args": {"beat_times_seconds": "PEGAR-hits-de-01", "sequence_id": "PEGAR-GUID-seq", "name_prefix": "beat", "comments": "r7"}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-04-beat-markers.json"},
+  {"tool": "list_markers_uxp", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-05-markers-readback.json", "nota": "verificar GUIDs y posiciones"},
+  {"tool": "setup_ducking", "args": {"node_id": "PEGAR-nodeId-musica", "base_db": 0, "ducking_windows": [{"start_seconds": 0, "end_seconds": 4, "duck_db": -12}], "fade_seconds": 0.3}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-06-ducking.json", "nota": "ventana = donde está la voz; readback de keyframes de volumen"},
+  {"tool": "analyze_loudness", "args": {"project_item_id": "PEGAR-GUID-musica", "target_lufs": -14}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-07-loudness.json"},
+  {"tool": "normalize_loudness_file", "args": {"input_path": "C:/Users/rpach/Videos/stress4/media-r7/musica_beats_r7.wav", "output_path": "C:/Users/rpach/Videos/stress4/media-r7/musica_beats_lufs14.wav", "target_lufs": -14}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-08-normalize.json", "nota": "ffprobe del output para verificar que existe y dura 30s"},
+  {"tool": "save_project_uxp", "args": {}, "save_raw": "C:/Users/rpach/Videos/stress4/runs/r7-s3-99-save.json"}
+]
