@@ -67,29 +67,36 @@ function restoreBridgeSession() {
 
 // SEC FORK (SEC 10): the MCP server writes a pairing file (bridge URL + token)
 // into well-known UXP plugin data locations so end users never paste secrets by
-// hand. This reader prefers the pairing file (it is the freshest statement from
-// a running server), falls back to the persisted session, and manual entry
-// keeps working. PREMIERE_MCP_SEC_AUTO_PAIRING=0 server-side stops the writer.
+// hand. The reader prefers the pairing file (it is the freshest statement from
+// a running server), re-reads it on every connect attempt so a server restart
+// on a new dynamic port is picked up automatically, falls back to the persisted
+// session, and manual entry keeps working: the moment a user edits a field by
+// hand, auto-pairing stops touching it until the panel is reopened.
+// PREMIERE_MCP_SEC_AUTO_PAIRING=0 server-side stops the writer.
 const PAIRING_FILENAME = "uxp-pairing.json";
 let pairedFrom = null;
 let connectedSincePairing = false;
+let manualCredsEdited = false;
 
-async function tryAutoPair() {
+async function refreshPairing() {
   try {
+    if (manualCredsEdited) return false;
     const storage = typeof require === "function" ? require("uxp").storage.localFileSystem : null;
     if (!storage || typeof storage.getDataFolder !== "function") return false;
     const folder = await storage.getDataFolder();
     let entry;
     try { entry = await folder.getEntry(PAIRING_FILENAME); } catch (_) { return false; }
     if (!entry) return false;
-    const raw = await entry.read();
-    const value = JSON.parse(raw);
+    const value = JSON.parse(await entry.read());
     if (!value || value.schema !== "premiere-mcp.uxp-pairing.v1") return false;
     if (typeof value.url !== "string" || !value.url || typeof value.token !== "string" || !value.token) return false;
     const urlEl = document.getElementById("bridge-url");
     const tokenEl = document.getElementById("bridge-token");
-    if (urlEl) urlEl.value = value.url;
-    if (tokenEl) tokenEl.value = value.token;
+    if (urlEl && tokenEl && (urlEl.value !== value.url || tokenEl.value !== value.token)) {
+      urlEl.value = value.url;
+      tokenEl.value = value.token;
+      connectedSincePairing = false;
+    }
     pairedFrom = value;
     return true;
   } catch (_) {
@@ -97,11 +104,16 @@ async function tryAutoPair() {
   }
 }
 
+const tryAutoPair = refreshPairing;
+
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("connect").addEventListener("click", connect);
   document.getElementById("refresh").addEventListener("click", () => publishState("manual"));
   document.getElementById("choose-workspace").addEventListener("click", chooseWorkspace);
   document.getElementById("revoke-workspace").addEventListener("click", revokeWorkspace);
+  for (const id of ["bridge-url", "bridge-token"]) {
+    document.getElementById(id).addEventListener("input", () => { manualCredsEdited = true; });
+  }
   try { await workspaceBroker.initialize(); } catch (error) { setStatus(error.message || String(error)); }
   try { await commandRegistry.initialize(); } catch (error) { setStatus(error.message || String(error)); }
   renderWorkspaceStatus();
@@ -401,6 +413,12 @@ async function dispatch(raw) {
 }
 
 function connect() {
+  // SEC FORK (SEC 10): re-check the pairing file before every attempt so a
+  // server restart on a new dynamic port (or a rotated token) is picked up
+  // without any user action. Manual edits set manualCredsEdited and win.
+  void refreshPairing().then(() => connectNow());
+}
+function connectNow() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (socket) try { socket.onclose = null; socket.close(); } catch (_) {}
   const configuredUrl = document.getElementById("bridge-url").value;
