@@ -208,6 +208,11 @@ async function audioSweep() {
     const eff = list[i];
     const row = { effect: eff, added: false, param: null, maxVolumeDb: null, removed: null, notes: [] };
     try {
+      const pre = await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 });
+      const preResult = extractResult(pre.text);
+      let preComps = []; const findP = (n) => { if (!n || typeof n !== "object") return; if (Array.isArray(n.components)) preComps = n.components; for (const v of Object.values(n)) if (v && typeof v === "object") findP(v); };
+      findP(preResult);
+      const preIds = new Set(preComps.map((c) => (c.matchName || c.id || "") + "|" + (c.displayName || "")));
       const add = await tool("manage_clip_effects_uxp", { action: "add", media_type: "audio", track_index: 0, clip_index: 0, effect_id: eff, expected_effect_id: eff });
       if (add.isError) { row.notes.push("add: " + add.text.slice(0, 120)); rows.push(row); continue; }
       row.added = true;
@@ -215,22 +220,32 @@ async function audioSweep() {
       const inspResult = extractResult(insp.text);
       let comps = []; const findC = (n) => { if (!n || typeof n !== "object") return; if (Array.isArray(n.components)) comps = n.components; for (const v of Object.values(n)) if (v && typeof v === "object") findC(v); };
       findC(inspResult);
-      const mine = comps.find((c) => (c.matchName || c.displayName || c.id) === eff);
+      const mine = comps.find((c) => !preIds.has((c.matchName || c.id || "") + "|" + (c.displayName || "")) && !(c.matchName || "").startsWith("Internal"));
       const idx = mine ? comps.indexOf(mine) : -1;
+      row.componentId = mine ? (mine.matchName || mine.id || "") : null;
       if (idx >= 0) {
-        for (let p = 0; p < 8; p++) {
+        for (let p = 0; p < 24; p++) {
           const pi = await tool("automate_effect_parameters_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p });
-          if (pi.isError) break;
+          if (pi.isError) continue;
           const pr = extractResult(pi.text);
           if (typeof pr.value === "number") {
-            let target = 100;
-            const s1 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target });
-            if (s1.isError) {
-              const m = s1.text.match(/must be from (-?[\d.]+) to (-?[\d.]+)/);
-              if (m) { target = parseFloat(m[2]); const s2 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target }); if (s2.isError) { row.notes.push("set: " + s2.text.slice(0, 100)); continue; } }
-              else { row.notes.push("set: " + s1.text.slice(0, 100)); continue; }
+            // cascada de candidatos: el rango varía por efecto y el host usa DOS
+            // formas de error ("must be from A to B" y "must be a finite number
+            // from A to B") — cubrir ambas y probar máximos progresivos.
+            const candidates = [100, 1, 0.95, 24, 20, 50, -1];
+            let applied = null;
+            for (const target of candidates) {
+              const s1 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target });
+              if (!s1.isError) { applied = { index: p, name: pr.paramName, value: target }; break; }
+              const m = s1.text.match(/from (-?[\d.]+) to (-?[\d.]+)/);
+              if (m) {
+                const hi = parseFloat(m[2]);
+                const s2 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: hi });
+                if (!s2.isError) { applied = { index: p, name: pr.paramName, value: hi }; break; }
+              }
             }
-            row.param = { index: p, name: pr.paramName, value: target };
+            if (!applied) { row.notes.push("set agotado p" + p); continue; }
+            row.param = applied;
             break;
           }
         }
@@ -239,13 +254,18 @@ async function audioSweep() {
       const render = await tool("add_to_render_queue", { output_path: out, preset_path: PRESET }, 180000);
       if (render.isError) { row.notes.push("render: " + render.text.slice(0, 120)); }
       else {
-        for (let w = 0; w < 24; w++) { await sleep(5000); if (fs.existsSync(out) && fs.statSync(out).size > 10000) break; }
+        let lastSize = -1; for (let w = 0; w < 40; w++) { await sleep(5000); if (fs.existsSync(out)) { const s = fs.statSync(out).size; if (s > 10000 && s === lastSize) break; lastSize = s; } }
         await sleep(3000);
-        const v = spawnSync("ffmpeg", ["-i", out, "-af", "volumedetect", "-f", "null", "-"], { timeout: 120000 });
-        const m = String(v.stderr).match(/max_volume: (-?[\d.]+) dB/);
+        let m = null;
+        for (let attempt = 0; attempt < 2 && !m; attempt++) {
+          if (attempt) await sleep(5000); // el render puede seguir escribiendo: un retry tras pausa
+          const v = spawnSync("ffmpeg", ["-i", out, "-af", "volumedetect", "-f", "null", "-"], { timeout: 120000 });
+          m = String(v.stderr).match(/max_volume: (-?[\d.]+) dB/);
+        }
         row.maxVolumeDb = m ? parseFloat(m[1]) : null;
+        if (!m) row.notes.push("volumedetect sin dato tras retry");
       }
-      const rm = await tool("manage_clip_effects_uxp", { action: "remove", media_type: "audio", track_index: 0, clip_index: 0, effect_id: eff, expected_effect_id: eff, component_index: idx });
+      const rm = idx >= 0 ? await tool("manage_clip_effects_uxp", { action: "remove", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, effect_id: (mine && (mine.matchName || mine.id)) || eff, expected_effect_id: (mine && (mine.matchName || mine.id)) || eff }) : await Promise.resolve({ isError: true, text: "idx -1" });
       row.removed = !rm.isError;
     } catch (e) { row.notes.push("excepción: " + String(e.message).slice(0, 120)); }
     rows.push(row);
