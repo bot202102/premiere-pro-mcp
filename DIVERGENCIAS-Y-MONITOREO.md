@@ -1,7 +1,7 @@
 # DIVERGENCIAS DEL FORK Y MONITOREO UPSTREAM
 
 > Qué diverge de `leancoderkavy/premiere-pro-mcp`, por qué, y qué vigilar allí para
-> decidir cuándo cada divergencia se resuelve. Se actualiza en cada sync.
+> decidir cuándo cada divergencia se resuelve. Se actualiza en cada sync. **Esquema de versiones del fork a partir de sec/1.19.0-1: sigue a upstream** (`sec/<versión upstream>-N`).
 > Complemento de `SECURITY-FORK-PLAN.md` (§26) — este doc es el contrato del merge.
 
 ## 1. Estado de la absorción (cierre 2026-10-02)
@@ -27,6 +27,7 @@ sin equivalente upstream).
 | ~~Warning undoRecordable en markers~~ | — | **ABSORBIDO**: la barrera de undo de upstream (#736/#753) cubre más (markerUndoWarning, undoTracked) | #736 | **RESUELTA — PREFER-UPSTREAM ejecutado** |
 | ~~Bounds físicos vía ffprobe~~ | — | **ABSORBIDO**: los bounds exactos por stream en ticks de upstream (#760) superan nuestro float de format.duration | #760 | **RESUELTA — PREFER-UPSTREAM ejecutado** |
 | 10 flags `PREMIERE_MCP_SEC_*` | tabla en `SECURITY-FORK-PLAN.md` §2 | Defaults endurecidos: sin auto-update, sin telemetría, sin HTTP, PlayerDebugMode opt-in, render breaker, perfil reducido | — (sin equivalente) | **SEC — permanente** |
+| ~~Fix point/color reads (arrays `[x,y]`/`[r,g,b(,a)]`, mensajes honestos)~~ | ~~`uxp-plugin/advanced-workflows.cjs`~~ | **RESUELTA 03-10: absorbida upstream** (v1.19.0, PR #766 `fda9ea2` — misma normalización y `UXP_VALUE_UNAVAILABLE`; el fork tomó SU implementación en sec/1.19.0-1 → divergencia de panel = 0) | leancoderkavy#765/#766 | **RESUELTA — PREFER-UPSTREAM ejecutado** |
 | **SEC 10 auto-pairing + puerto dinámico + anti-zombi** | `src/bridge/uxp-pairing.ts` + `src/index.ts` (watchdog stdin, heartbeat 5s, cleanup en exit) + `uxp-plugin/index.cjs` (staleness 3x heartbeat) | Publicación cero-fricción; el transporte stdio del SDK NO ve el cierre de stdin (zombis ante clientes muertos — verificado en vivo) | — | **SEC — permanente** |
 | Tests autocontenidos (entrypoints/telemetry sin env de shell) | `tests/entrypoints-unit.test.ts`, `tests/telemetry*.test.ts` | `npm test` debe pasar sin provisionar flags SEC en la shell | — | **SEC — permanente** |
 | pnpm supply-chain (minimumReleaseAge 7d, no-build-scripts, overrides) | `pnpm-workspace.yaml` | Cadena de suministro | — | **SEC — permanente** |
