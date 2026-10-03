@@ -132,7 +132,14 @@ describe("modern MCP surface", () => {
       // unsafe-script, so the two scripting tools are not advertised.
       expect(tools.tools.map((tool) => tool.name)).not.toContain("execute_extendscript");
       expect(tools.tools.map((tool) => tool.name)).not.toContain("evaluate_expression");
-      expect(tools.tools).toHaveLength(384);
+      // FORK-DIVERGENCE: UXP tools register deterministically even without a
+      // connected bridge (upstream: 384 without bridge) — a call without a
+      // bridge fails honestly per call instead of the tool vanishing.
+      expect(tools.tools).toHaveLength(479);
+      expect(tools.tools.map((tool) => tool.name)).toContain("get_uxp_state");
+      const uxpProbe = await client.callTool({ name: "get_uxp_state", arguments: {} });
+      expect(uxpProbe.isError).toBe(true);
+      expect(JSON.stringify(uxpProbe.content)).toContain("not connected");
       expect(tools.tools.find((tool) => tool.name === "preview_after_effects_render_handoff")?.annotations?.readOnlyHint).toBe(true);
       expect(tools.tools.find((tool) => tool.name === "apply_after_effects_render_handoff")?.annotations?.readOnlyHint).toBe(false);
       const capabilityTool = tools.tools.find((tool) => tool.name === "get_capabilities");

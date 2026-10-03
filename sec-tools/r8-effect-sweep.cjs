@@ -232,16 +232,21 @@ async function audioSweep() {
             // cascada de candidatos: el rango varía por efecto y el host usa DOS
             // formas de error ("must be from A to B" y "must be a finite number
             // from A to B") — cubrir ambas y probar máximos progresivos.
+            // Params timeVarying (común en audio, R10): set_value no aplica —
+            // la vía es add_keyframe.
+            const isTv = pr.timeVarying === true;
+            const actionName = isTv ? "add_keyframe" : "set_value";
+            const extraArgs = isTv ? { time_seconds: 1 } : {};
             const candidates = [100, 1, 0.95, 24, 20, 50, -1];
             let applied = null;
             for (const target of candidates) {
-              const s1 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target });
-              if (!s1.isError) { applied = { index: p, name: pr.paramName, value: target }; break; }
+              const s1 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target, ...extraArgs });
+              if (!s1.isError) { applied = { index: p, name: pr.paramName, value: target, via: actionName }; break; }
               const m = s1.text.match(/from (-?[\d.]+) to (-?[\d.]+)/);
               if (m) {
                 const hi = parseFloat(m[2]);
-                const s2 = await tool("automate_effect_parameters_uxp", { action: "set_value", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: hi });
-                if (!s2.isError) { applied = { index: p, name: pr.paramName, value: hi }; break; }
+                const s2 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: hi, ...extraArgs });
+                if (!s2.isError) { applied = { index: p, name: pr.paramName, value: hi, via: actionName }; break; }
               }
             }
             if (!applied) { row.notes.push("set agotado p" + p); continue; }
