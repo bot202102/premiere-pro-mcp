@@ -1,3 +1,3 @@
-# Fork sec/1.19.0-2 = upstream v1.19.0 + hardening + lease F-OP-1. Carril: corepack pnpm.
-1d828796ce5fa4650c3a3833d13034aad01c662ba6d2ddfe0cb1a858d2023401 *premiere-pro-mcp-1.19.0.tgz
+# Fork sec/1.19.0-3 = v1.19.0 + hardening + lease + render-honesty. Carril: corepack pnpm.
+4d2cbb58ec8d8e108e01320c6cb35d7cb76d93a6230e5fa19beb84632aaf64b0 *premiere-pro-mcp-1.19.0.tgz
 2b6b4377775c42b5dc3c367b00cc1f549b553088d50a337992a2f87fd72e7924 *artifacts/premiere-pro-mcp-uxp-1.19.0-direct.ccx
