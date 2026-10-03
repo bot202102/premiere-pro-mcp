@@ -348,7 +348,7 @@ export function collectTools(
     ...getEditorialPlanTools({ repository: projectContextRepository, uxpBridge }),
     ...getCompetitorGapTools(bridgeOptions, uxpBridge),
     ...getMediaWatchTools(mediaWatchRegistry),
-    ...(uxpBridge ? getUxpTools(uxpBridge) : {}),
+    ...(getUxpTools(uxpBridge)),
   };
   Object.assign(
     tools,

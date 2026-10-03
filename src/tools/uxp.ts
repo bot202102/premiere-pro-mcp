@@ -18,10 +18,14 @@ import { getUxpTimelineSourceLabelWorkflowTools } from "./uxp-timeline-source-la
 import { getUxpWorkflowTools } from "./uxp-workflows.js";
 
 function invoke(
-  bridge: UxpWebSocketBridge,
+  bridge: UxpWebSocketBridge | undefined,
   command: string,
   args: Record<string, unknown> = {},
 ) {
+  // FORK-DIVERGENCE (R10 X): tools register deterministically whether or not a
+  // bridge is connected, so tools/list is stable; a missing bridge fails per
+  // call with the honest error instead of disappearing from the catalog.
+  if (!bridge) return Promise.resolve({ success: false, error: "Premiere UXP bridge is not connected" });
   return bridge.request(command, args)
     .then((result) => ({ success: true, data: { backend: "uxp", result } }))
     .catch((error: unknown) => ({
@@ -30,7 +34,7 @@ function invoke(
     }));
 }
 
-export function getUxpTools(bridge: UxpWebSocketBridge) {
+export function getUxpTools(bridge?: UxpWebSocketBridge) {
   const operationId = {
     type: "string" as const,
     description: "Optional idempotency key (1-128 letters, numbers, dot, underscore, colon, or dash).",
@@ -71,7 +75,7 @@ export function getUxpTools(bridge: UxpWebSocketBridge) {
     get_uxp_capabilities: {
       description: "Report the authenticated local UXP bridge connection and the capabilities advertised by the connected Premiere host.",
       parameters: {},
-      handler: async () => ({ success: true, data: bridge.getState() }),
+      handler: async () => ({ success: true, data: bridge ? bridge.getState() : { status: "stopped", connected: false } }),
     },
     get_uxp_state: {
       description: "Read the active project, sequence, and playhead state through the connected Premiere UXP bridge.",

@@ -9,7 +9,7 @@ import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 import { UxpWebSocketBridge } from "./bridge/uxp-websocket-bridge.js";
-import { deleteOwnPairingFiles, writePairingFiles } from "./bridge/uxp-pairing.js";
+import { deleteOwnPairingFiles, claimPairing, writePairingFiles } from "./bridge/uxp-pairing.js";
 import {
   collectLocalDoctor,
   createDoctorRepairPlan,
@@ -380,7 +380,9 @@ async function main() {
 
   let uxpBridge: UxpWebSocketBridge | undefined;
   let pairingHeartbeat: ReturnType<typeof setInterval> | undefined;
+  let pairingYieldedTo: number | null = null;
   let shuttingDown = false;
+  const serverStartedAt = Date.now();
   if (process.env.PREMIERE_UXP_TOKEN) {
     const explicitPort = process.env.PREMIERE_UXP_PORT
       ? parseInt(process.env.PREMIERE_UXP_PORT, 10)
@@ -425,18 +427,31 @@ async function main() {
       debugLog(`UXP bridge listening on ws://${address.host}:${address.port}${address.path}`);
       if (secAutoPairingOn && process.env.PREMIERE_UXP_TOKEN) {
         const pairingToken = process.env.PREMIERE_UXP_TOKEN;
-        const writePairingSnapshot = () => writePairingFiles({
+        const claimSnapshot = () => claimPairing({
           url: `ws://${address.host}:${address.port}${address.path}`,
           token: pairingToken,
+          startedAt: serverStartedAt,
         }, tempDir);
         try {
-          const written = writePairingSnapshot();
-          if (written.length) debugLog(`UXP pairing file written to ${written.length} location(s)`);
-          // SEC 10 (fork): the pairing file is a liveness beacon — refresh it
-          // periodically so the panel can tell a live server from a stale file
-          // left behind by a crashed one.
+          const first = claimSnapshot();
+          if (first.claimed) debugLog("UXP pairing claimed");
+          else debugLog(`UXP pairing yielded to newer server (pid ${first.winnerPid}); re-arming if it dies`);
+          // SEC 10 (fork): the pairing file is a liveness beacon AND an
+          // ownership claim. The heartbeat re-claims every interval: while we
+          // own it, that is the refresh; while we have yielded to a newer
+          // server, it doubles as the watchdog that re-claims automatically
+          // if the winner dies (its file goes stale).
           pairingHeartbeat = setInterval(() => {
-            try { writePairingSnapshot(); } catch { /* best-effort beacon */ }
+            try {
+              const result = claimSnapshot();
+              if (result.claimed && pairingYieldedTo) {
+                debugLog(`UXP pairing re-claimed (previous winner pid ${pairingYieldedTo} is gone)`);
+                pairingYieldedTo = null;
+              } else if (!result.claimed && !pairingYieldedTo) {
+                pairingYieldedTo = result.winnerPid ?? null;
+                debugLog(`UXP pairing yielded to newer server (pid ${pairingYieldedTo}); re-arming if it dies`);
+              }
+            } catch { /* best-effort beacon */ }
           }, PAIRING_HEARTBEAT_MS);
         } catch (error) {
           debugLog(`UXP pairing file could not be written: ${error instanceof Error ? error.message : error}`);

@@ -89,3 +89,61 @@ describe("SEC 10: UXP pairing files", () => {
     expect(existsSync(file)).toBe(false);
   });
 });
+
+import { claimPairing } from "../src/bridge/uxp-pairing.js";
+
+describe("SEC 10: pairing ownership arbitration (R10)", () => {
+  const ORIGINAL_APPDATA_ARBITRATION = process.env.APPDATA;
+
+  function isolatedAppData(): string {
+    const root = mkdtempSync(join(tmpdir(), "uxp-arbitration-"));
+    tempFixtures.push(root);
+    process.env.APPDATA = root; // aislar: NADA de los pares reales de la máquina
+    return root;
+  }
+
+  afterEach(() => {
+    process.env.APPDATA = ORIGINAL_APPDATA_ARBITRATION;
+  });
+
+  it("yields to a NEWER live claim from a different pid without touching its file", () => {
+    const fallback = makeTempFallback();
+    mkdirSync(fallback, { recursive: true });
+    isolatedAppData();
+    const winner = { schema: "premiere-mcp.uxp-pairing.v1" as const, url: "ws://127.0.0.1:2/uxp", token: "w".repeat(16), pid: process.pid + 777, issuedAt: Date.now(), startedAt: Date.now() + 5000, heartbeatMs: 5000 };
+    writeFileSync(join(fallback, pairingFileName()), JSON.stringify(winner));
+    const result = claimPairing({ url: "ws://127.0.0.1:1/uxp", token: "a".repeat(16), startedAt: Date.now() }, fallback);
+    expect(result.claimed).toBe(false);
+    expect(result.winnerPid).toBe(winner.pid);
+    expect(JSON.parse(readFileSync(join(fallback, pairingFileName()), "utf8")).pid).toBe(winner.pid);
+  });
+
+  it("takes over when the newer claim is STALE (winner died)", () => {
+    const fallback = makeTempFallback();
+    mkdirSync(fallback, { recursive: true });
+    isolatedAppData();
+    const dead = { schema: "premiere-mcp.uxp-pairing.v1" as const, url: "ws://127.0.0.1:2/uxp", token: "w".repeat(16), pid: process.pid + 778, issuedAt: Date.now() - 60000, startedAt: Date.now() + 5000, heartbeatMs: 5000 };
+    writeFileSync(join(fallback, pairingFileName()), JSON.stringify(dead));
+    const result = claimPairing({ url: "ws://127.0.0.1:1/uxp", token: "a".repeat(16), startedAt: Date.now() }, fallback);
+    expect(result.claimed).toBe(true);
+    expect(JSON.parse(readFileSync(join(fallback, pairingFileName()), "utf8")).pid).toBe(process.pid);
+  });
+
+  it("takes over when the existing claim is older (self is the newest server)", () => {
+    const fallback = makeTempFallback();
+    mkdirSync(fallback, { recursive: true });
+    isolatedAppData();
+    const older = { schema: "premiere-mcp.uxp-pairing.v1" as const, url: "ws://127.0.0.1:2/uxp", token: "w".repeat(16), pid: process.pid + 779, issuedAt: Date.now(), startedAt: Date.now() - 60000, heartbeatMs: 5000 };
+    writeFileSync(join(fallback, pairingFileName()), JSON.stringify(older));
+    const result = claimPairing({ url: "ws://127.0.0.1:1/uxp", token: "a".repeat(16), startedAt: Date.now() }, fallback);
+    expect(result.claimed).toBe(true);
+    expect(JSON.parse(readFileSync(join(fallback, pairingFileName()), "utf8")).pid).toBe(process.pid);
+  });
+
+  it("writes startedAt into the document for arbitration", () => {
+    const fallback = makeTempFallback();
+    isolatedAppData();
+    writePairingFiles({ url: "ws://127.0.0.1:3/uxp", token: "b".repeat(16), startedAt: 123456 }, fallback);
+    expect(JSON.parse(readFileSync(join(fallback, pairingFileName()), "utf8")).startedAt).toBe(123456);
+  });
+});

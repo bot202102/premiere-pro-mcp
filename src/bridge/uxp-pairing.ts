@@ -18,6 +18,8 @@ export interface UxpPairingInfo {
   url: string;
   token: string;
   serverVersion?: string;
+  /** This server's boot time (Date.now()); arbitration yields to newer servers. */
+  startedAt?: number;
 }
 
 interface PairingDocument extends UxpPairingInfo {
@@ -73,6 +75,7 @@ function renderPairingDocument(info: UxpPairingInfo): string {
     pid: process.pid,
     issuedAt: Date.now(),
     heartbeatMs: PAIRING_HEARTBEAT_MS,
+    ...(info.startedAt != null ? { startedAt: info.startedAt } : {}),
     ...(info.serverVersion ? { serverVersion: info.serverVersion } : {}),
   };
   return JSON.stringify(document);
@@ -80,6 +83,60 @@ function renderPairingDocument(info: UxpPairingInfo): string {
 
 /** How often the live server refreshes the pairing file (panel staleness window = 3x). */
 export const PAIRING_HEARTBEAT_MS = 5000;
+
+interface ExistingClaim {
+  pid?: unknown;
+  issuedAt?: unknown;
+  startedAt?: unknown;
+}
+
+function readExistingClaim(file: string): ExistingClaim | null {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as ExistingClaim;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface PairingClaimResult {
+  /** false = a newer live server owns the pairing; this server must yield. */
+  claimed: boolean;
+  winnerPid?: number;
+}
+
+/**
+ * SEC 10 (fork): claim the pairing with deterministic arbitration.
+ *
+ * A pure last-writer-wins heartbeat breaks with two LIVE servers: each keeps
+ * rewriting the file every few seconds and the panel flaps or stays with the
+ * old one indefinitely (R10 hold-server anti-pattern). The claim check makes
+ * ownership deterministic — the server with the NEWER startedAt owns the
+ * pairing; an older server yields (stops writing) but keeps its listener, and
+ * its next heartbeat automatically re-claims if the winner's file goes stale
+ * (winner died). Ties break by larger pid. No process is ever killed: the
+ * yielding server only stops competing for the file.
+ */
+export function claimPairing(info: UxpPairingInfo, explicitTempDir?: string): PairingClaimResult {
+  const canonical = pairingDirectories(explicitTempDir).at(-1);
+  if (canonical) {
+    const existing = readExistingClaim(join(canonical, PAIRING_FILENAME));
+    const otherPid = typeof existing?.pid === "number" ? existing.pid : null;
+    if (otherPid !== null && otherPid !== process.pid) {
+      const otherLive = typeof existing?.issuedAt === "number" && Date.now() - existing.issuedAt <= PAIRING_HEARTBEAT_MS * 3;
+      const otherStartedAt = typeof existing?.startedAt === "number" ? existing.startedAt : null;
+      const myStartedAt = info.startedAt ?? 0;
+      const otherIsNewer = otherStartedAt != null
+        ? otherStartedAt > myStartedAt || (otherStartedAt === myStartedAt && otherPid > process.pid)
+        : false;
+      if (otherLive && otherIsNewer) {
+        return { claimed: false, winnerPid: otherPid };
+      }
+    }
+  }
+  writePairingFiles(info, explicitTempDir);
+  return { claimed: true };
+}
 
 /** Writes the pairing file to every candidate directory. Returns the written paths. */
 export function writePairingFiles(info: UxpPairingInfo, explicitTempDir?: string): string[] {
