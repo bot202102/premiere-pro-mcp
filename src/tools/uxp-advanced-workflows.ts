@@ -724,6 +724,20 @@ export function getUxpAdvancedWorkflowTools(bridge: UxpWebSocketBridge) {
             ...operation(args),
           });
         }
+        if (args.action === "set_interpolation") {
+          const result = await invoke(bridge, commands[args.action], { ...common, ...compact({ interpolation: args.interpolation, endSeconds: args.end_seconds }), ...operation(args) });
+          // FORK-DIVERGENCE: render-honesty note | live-measured on 26.5.2 (qa
+          // rounds 8/9): the mode stores and readback-verifies, but the
+          // renderer does not honor temporal keyframe curves — values step
+          // between keyframes in every mode | disposition: KEEP until Adobe
+          // ships a build that honors the stored curves.
+          const r = result as { success: boolean; data?: { result?: unknown } };
+          if (r.success && r.data && typeof r.data.result === "object" && r.data.result !== null) {
+            (r.data.result as Record<string, unknown>).renderHonesty =
+              "SEC FORK: the interpolation mode is stored and readback-verified, but this Premiere build's render has been measured NOT honoring temporal keyframe interpolation (values step between keyframes in every mode). Verify any time-curve render independently.";
+          }
+          return result;
+        }
         return invoke(bridge, commands[args.action], { ...common, ...compact({ value: args.value, endSeconds: args.end_seconds, interpolation: args.interpolation }), ...operation(args) });
       },
     },
