@@ -1,2 +1,2 @@
-6dc104886d9cd3638ed6443c2925d53ba3ceecd521f0e3739acbdf6512a96106 *premiere-pro-mcp-1.18.6.tgz (sec/1.18.6-23, sincronizado con upstream v1.19.0/fda9ea2)
-b48658091c5ba4ebeb7f4d50bfe4b27d99505a158d2b6c5fe04c457c575edefe *premiere-pro-mcp-uxp-1.18.6-direct.ccx (sec/1.18.6-23)
+504ff06b272985ce23be01a65d3bc17b4490cd6a7f009ef2de1f73adf12cd4ea *premiere-pro-mcp-1.19.0.tgz (fork sec/1.19.0-1 = upstream v1.19.0 + SEC hardening)
+29982ae5440054fb1ed914b5cb7109e793748f1caafa3e9af38d8c19c80314a0 *premiere-pro-mcp-uxp-1.19.0-direct.ccx (fork sec/1.19.0-1)
