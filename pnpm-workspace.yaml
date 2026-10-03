@@ -18,8 +18,24 @@ overrides:
 # los pins nuevos tras cada merge upstream deberán envejecer o excluirse:
 #   minimumReleaseAgeExclude: ["@posthog/core"]
 minimumReleaseAge: 10080
-# Exclusiones de la puerta (solo para parches de seguridad urgentes):
-minimumReleaseAgeExclude: []
+# Exclusiones de la puerta. EXCEPCIÓN DOCUMENTADA (2026-10-03, sync v1.19.0):
+# paquetes fijados por la release upstream v1.19.0 (#766) con <7d de madurez.
+# Compensación: la release upstream pasó su matriz CI completa (Node 20/22/24 +
+# CodeQL), y nuestra suite (4692 tests) + auditor de familias corren sobre estos
+# pines exactos. Revisar: eliminar entradas cuando cumplan 7d (la puerta vuelve).
+minimumReleaseAgeExclude:
+  - ws@8.22.0
+  - "@modelcontextprotocol/client@2.2.0"
+  - "@modelcontextprotocol/core@2.2.0"
+  - "@modelcontextprotocol/server@2.2.0"
+  - "@modelcontextprotocol/node@2.2.0"
+  - "@typescript-eslint/parser@8.71.0"
+  - "@typescript-eslint/project-service@8.71.0"
+  - "@typescript-eslint/scope-manager@8.71.0"
+  - "@typescript-eslint/tsconfig-utils@8.71.0"
+  - "@typescript-eslint/types@8.71.0"
+  - "@typescript-eslint/typescript-estree@8.71.0"
+  - "@typescript-eslint/visitor-keys@8.71.0"
 # Allowlist de scripts de ciclo de vida de dependencias: NINGUNO puede ejecutarse.
 # (hoy no hace falta ninguno; el escaneo de node_modules no encuentra install scripts)
 onlyBuiltDependencies: []
@@ -32,3 +48,4 @@ verifyDepsBeforeRun: error
 engineStrict: true
 # Fijar siempre versiones exactas al añadir dependencias nuevas:
 saveExact: true
+

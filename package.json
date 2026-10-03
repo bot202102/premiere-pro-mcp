@@ -229,10 +229,10 @@
     "node": ">=20.19.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.2.0",
     "@posthog/core": "1.55.2",
     "@posthog/types": "1.412.4",
-    "@modelcontextprotocol/node": "^2.1.0",
-    "@modelcontextprotocol/server": "^2.0.0",
     "jose": "^6.2.10",
     "posthog-node": "5.54.1",
     "ws": "^8.22.0",
@@ -243,12 +243,12 @@
     "@adobe/eslint-plugin-premierepro": "26.3.0",
     "@adobe/premierepro": "26.3.0",
     "@adobe/premierepro-beta": "npm:@adobe/premierepro@26.5.0-beta.73",
-    "acorn": "8.18.0",
     "@modelcontextprotocol/client": "^2.2.0",
     "@types/node": "^26.6.3",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/parser": "^8.71.0",
     "@vitest/coverage-v8": "^4.1.11",
+    "acorn": "8.18.0",
     "eslint": "^9.39.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
