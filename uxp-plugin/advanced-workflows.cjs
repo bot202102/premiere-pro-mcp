@@ -1018,17 +1018,7 @@
     async function pointParameterSnapshot(context) {
       const projectId = guidString(context.project && context.project.guid), sequenceId = guidString(context.sequence && context.sequence.guid);
       if (!projectId || !sequenceId) throw commandError("UXP_INVALID_HOST_STATE", "Premiere did not provide stable project and sequence identities for the PointF parameter");
-      const raw = keyframeValue(await context.param.getStartValue());
-      // Premiere's UXP API returns point values as [x, y] arrays (e.g. Motion
-      // Position reads back [0.5, 0.5]); the tool contract is {x, y}. Normalize
-      // both shapes here so inspect/set_point_value work on real point
-      // parameters, and fail with a specific message on scalar parameters
-      // (previously assertObject surfaced the misleading "args must be an object").
-      const normalized = Array.isArray(raw) && raw.length === 2 && raw.every((n) => typeof n === "number") ? { x: raw[0], y: raw[1] } : raw;
-      if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
-        throw commandError("UXP_PARAMETER_NOT_POINT", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is a scalar parameter, not a point (PointF) parameter. Use action 'inspect'/'set_value' for scalar parameters; 'inspect_point_value' only applies to point parameters such as position.");
-      }
-      const point = pointValue(normalized, "Premiere parameter start value");
+      const point = hostParameterValue(keyframeValue(await context.param.getStartValue()), "point");
       return {
         projectId, sequenceId, mediaType: context.mediaType, trackIndex: context.trackIndex, clipIndex: context.clipIndex,
         componentIndex: context.componentIndex, componentId: context.componentId, paramIndex: context.paramIndex,
@@ -1210,22 +1200,7 @@
     async function colorParameterSnapshot(context) {
       const projectId = guidString(context.project && context.project.guid), sequenceId = guidString(context.sequence && context.sequence.guid);
       if (!projectId || !sequenceId) throw commandError("UXP_INVALID_HOST_STATE", "Premiere did not provide stable project and sequence identities for the Color parameter");
-      const raw = keyframeValue(await context.param.getStartValue());
-      // Premiere's UXP API may hand back color values as arrays ([r, g, b] or
-      // [r, g, b, a]) just as it returns points as [x, y]; normalize both the
-      // array and object shapes, and fail with a specific message on scalars
-      // (previously colorValue's assertObject said the misleading "args must
-      // be an object").
-      const normalized = Array.isArray(raw) && (raw.length === 3 || raw.length === 4) && raw.every((n) => typeof n === "number")
-        ? { red: raw[0], green: raw[1], blue: raw[2], alpha: raw.length === 4 ? raw[3] : 1 }
-        : raw;
-      if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
-        if (normalized === null || normalized === undefined) {
-          throw commandError("UXP_VALUE_UNAVAILABLE", "Parameter '" + context.paramName + "' (component " + context.componentId + ") did not return a readable color value through this Premiere build's API; the effect may keep its color internal. Try the effect's own parameter set or the UI.");
-        }
-        throw commandError("UXP_PARAMETER_NOT_COLOR", "Parameter '" + context.paramName + "' (component " + context.componentId + ") is a scalar parameter, not a color parameter. Use action 'inspect'/'set_value' for scalar parameters; 'inspect_color_value' only applies to color parameters.");
-      }
-      const color = colorValue(normalized, "Premiere parameter start value");
+      const color = hostParameterValue(keyframeValue(await context.param.getStartValue()), "color");
       return {
         projectId, sequenceId, mediaType: context.mediaType, trackIndex: context.trackIndex, clipIndex: context.clipIndex,
         componentIndex: context.componentIndex, componentId: context.componentId, paramIndex: context.paramIndex,
@@ -2380,6 +2355,25 @@
     function settingMatches(after, key, value) { if (key === "videoWidth") return after.videoFrame && numbersEqual(after.videoFrame.width, value); if (key === "videoHeight") return after.videoFrame && numbersEqual(after.videoFrame.height, value); return valuesEqual(after[key], value); }
     function keyframeValue(value) { return value && value.value && Object.prototype.hasOwnProperty.call(value.value, "value") ? value.value.value : value && value.value !== undefined ? value.value : null; }
     function scalarValue(value) { if (typeof value !== "number" && typeof value !== "string" && typeof value !== "boolean") throw commandError("UXP_INVALID_ARGUMENT", "value must be a number, string, or boolean"); if (typeof value === "number" && !Number.isFinite(value)) throw commandError("UXP_INVALID_ARGUMENT", "value must be finite"); if (typeof value === "string" && value.length > 4000) throw commandError("UXP_INVALID_ARGUMENT", "value string exceeds 4000 characters"); return value; }
+    // Host reads may expose arrays or native objects. Keep client input validation separate.
+    function hostParameterValue(value, kind) {
+      if (value == null) throw commandError("UXP_VALUE_UNAVAILABLE", "Premiere did not expose a " + kind + " parameter start value");
+      const fields = kind === "point" ? ["x", "y"] : ["red", "green", "blue", "alpha"];
+      if (typeof value !== "object") throw commandError("UXP_TARGET_UNSUPPORTED", "Premiere parameter does not expose a " + kind + " value");
+      if (Array.isArray(value) && value.length !== fields.length && !(kind === "color" && value.length === 3)) {
+        throw commandError("UXP_INVALID_HOST_STATE", "Premiere returned an invalid " + kind + " value length");
+      }
+      const normalized = {};
+      for (let index = 0; index < fields.length; index += 1) {
+        const component = Array.isArray(value) ? (kind === "color" && index === 3 && value.length === 3 ? 1 : value[index]) : value[fields[index]];
+        if (typeof component !== "number" || !Number.isFinite(component) || component < -1000000 || component > 1000000) {
+          throw commandError("UXP_INVALID_HOST_STATE", "Premiere returned an unreadable " + kind + " component: " + fields[index]);
+        }
+        normalized[fields[index]] = component;
+      }
+      return normalized;
+    }
+
     function pointValue(value, label) {
       assertObject(value); assertOnlyKeys(value, ["x", "y"]);
       return {
