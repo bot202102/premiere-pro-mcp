@@ -77,6 +77,7 @@ const PAIRING_FILENAME = "uxp-pairing.json";
 let pairedFrom = null;
 let connectedSincePairing = false;
 let manualCredsEdited = false;
+let leaseTimer = null;
 
 async function refreshPairing() {
   try {
@@ -111,6 +112,27 @@ async function refreshPairing() {
 
 const tryAutoPair = refreshPairing;
 
+// SEC FORK (SEC 10, F-OP-1): pairing LEASE. The self-healing on `onclose` only
+// covers a server that DIES. An alive-but-orphaned server keeps its socket
+// ESTABLISHED, `onclose` never fires, and the panel never re-reads the pairing
+// — a newer healthy server stays locked out indefinitely (R8: a zombie held
+// the panel through a whole round until manual kill). The lease re-reads the
+// pairing file every 15 s and jumps when a DIFFERENT pid has become the
+// pairing writer (last-writer-wins is the documented multi-server semantic).
+// Comparing pid, not issuedAt: our own server's heartbeat refreshes issuedAt
+// every few seconds and must not make the panel flap against itself.
+let adoptedPairingPid = null;
+function startPairingLease() {
+  if (leaseTimer) return;
+  leaseTimer = setInterval(async () => {
+    if (manualCredsEdited) return;
+    const before = pairedFrom && pairedFrom.pid;
+    try { await refreshPairing(); } catch (_) { return; }
+    const after = pairedFrom && pairedFrom.pid;
+    if (pairedFrom && after !== before) connect();
+  }, 15000);
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("connect").addEventListener("click", connect);
   document.getElementById("refresh").addEventListener("click", () => publishState("manual"));
@@ -125,6 +147,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let paired = false;
   try { paired = await tryAutoPair(); } catch (_) {}
   if (!paired) restoreBridgeSession();
+  startPairingLease();
   subscribeHostEvents();
   connect();
   startFallbackPolling();

@@ -1,2 +1,3 @@
-f5948f7b9fc57bbc8f587bd18969c7eeb522a65113e0349bc16eba4130646d38 *premiere-pro-mcp-1.19.0.tgz (fork sec/1.19.0-1, carril pnpm)
-29982ae5440054fb1ed914b5cb7109e793748f1caafa3e9af38d8c19c80314a0 *premiere-pro-mcp-uxp-1.19.0-direct.ccx (fork sec/1.19.0-1)
+# Fork sec/1.19.0-1 = upstream v1.19.0 (fda9ea2) + hardening SEC + KEEP (pre-razor, startBatch-auto). Carril: corepack pnpm.
+f5948f7b9fc57bbc8f587bd18969c7eeb522a65113e0349bc16eba4130646d38 *premiere-pro-mcp-1.19.0.tgz
+29982ae5440054fb1ed914b5cb7109e793748f1caafa3e9af38d8c19c80314a0 *artifacts/premiere-pro-mcp-uxp-1.19.0-direct.ccx

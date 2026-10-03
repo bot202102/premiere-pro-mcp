@@ -58,7 +58,7 @@ async function tool(name, toolArgs, timeoutMs = 90000) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function psnrDb(a, b) {
-  const r = spawnSync("ffmpeg", ["-y", "-v", "error", "-i", a, "-i", b, "-filter_complex", "psnr", "-f", "null", "-"], { timeout: 60000 });
+  const r = spawnSync("ffmpeg", ["-y", "-i", a, "-i", b, "-filter_complex", "psnr", "-f", "null", "-"], { timeout: 60000 });
   const m = String(r.stderr).match(/average:([0-9.]+|inf)/);
   if (!m) return null;
   return m[1] === "inf" ? Infinity : parseFloat(m[1]);
@@ -69,12 +69,28 @@ function findPath(raw) {
 }
 function extractResult(t) { try { return JSON.parse(t).result ?? JSON.parse(t); } catch { return {}; } }
 
+
+function saveInlineImage(raw, outDir, tag) {
+  try {
+    const parsed = JSON.parse(raw);
+    const content = (parsed.content || []);
+    for (const item of content) {
+      if (item.type === 'image' && item.data) {
+        const p = outDir + '/r8-capture-' + tag + '.png';
+        fs.writeFileSync(p, Buffer.from(item.data, 'base64'));
+        return p;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 const BUILTIN = new Set(["AE.ADBE Motion", "AE.ADBE Opacity", "AE.ADBE Vector Motion", "AE.ADBE Time Remapping", "AE.ADBE Graphic Group", "AE.ADBE Text", "AE.ADBE Shape"]);
 
 async function waitBridge() {
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 60; i++) {
     try { const s = await tool("get_uxp_state", {}, 20000); if (!s.isError) return true; } catch (_) {}
-    await sleep(3000);
+    await sleep(5000);
   }
   return false;
 }
@@ -87,25 +103,20 @@ async function videoSweep() {
 
   // canonical clip at V1/clip0, playhead mid-clip, baseline frame
   await tool("manage_sequence_playhead_uxp", { action: "set", position_seconds: 4 });
-  const base = await tool("capture_frame", {});
+  const base = await tool("capture_frame", { time_seconds: 4 });
   if (base.isError) throw new Error("capture_frame baseline: " + base.text.slice(0, 200));
-  const baselinePath = findPath(base.raw);
-  if (!baselinePath) throw new Error("no pude extraer el path del baseline: " + base.text.slice(0, 200));
+  const baselinePath = findPath(base.raw) || saveInlineImage(base.raw, OUT, "baseline");
+  if (!baselinePath) throw new Error("no pude extraer el path del baseline. RAW: " + base.raw.slice(0, 500));
   console.log("[r8] baseline:", baselinePath);
 
   const cat = await tool("manage_clip_effects_uxp", { action: "catalog", media_type: "video" });
   const catalogResult = extractResult(cat.text);
   const entries = [];
-  const walk = (node) => {
-    if (!node || typeof node !== "object") return;
-    if (typeof node.matchName === "string") entries.push(node);
-    for (const v of Object.values(node)) if (v && typeof v === "object") walk(v);
-  };
-  walk(catalogResult);
+  const catalogRoot = catalogResult.video || catalogResult;
+  const mns = catalogRoot.matchNames || [];
+  const dns = catalogRoot.displayNames || [];
+  mns.forEach((m, i) => entries.push({ matchName: m, displayName: dns[i] || m }));
   const effects = [...new Set(entries.map((e) => e.matchName))].filter((n) => !BUILTIN.has(n)).sort();
-  console.log(`[r8] catálogo: ${effects.length} matchNames de vídeo (excluidas built-ins)`);
-  fs.writeFileSync(path.join(OUT, "catalog.json"), JSON.stringify(entries, null, 1));
-
   const rows = [];
   const list = effects.slice(0, MAX);
   for (let i = 0; i < list.length; i++) {
@@ -127,9 +138,9 @@ async function videoSweep() {
       row.componentIndex = compIndex;
 
       if (compIndex >= 0) {
-        for (let p = 0; p < 8; p++) {
+        for (let p = 0; p < 24; p++) {
           const pi = await tool("automate_effect_parameters_uxp", { action: "inspect", media_type: "video", track_index: 0, clip_index: 0, component_index: compIndex, param_index: p });
-          if (pi.isError) break;
+          if (pi.isError) continue;
           const pr = extractResult(pi.text);
           const val = pr && typeof pr.value !== "undefined" ? pr.value : undefined;
           if (typeof val === "number") {
@@ -146,9 +157,9 @@ async function videoSweep() {
         }
       }
 
-      await sleep(400); // deja respirar al renderer
-      const cap = await tool("capture_frame", {});
-      const capPath = findPath(cap.raw);
+      await sleep(2500); // deja respirar al renderer
+      const cap = await tool("capture_frame", { time_seconds: 4 + (i % 50) * 0.002 });
+      const capPath = findPath(cap.raw) || saveInlineImage(cap.raw, OUT, "cap");
       if (capPath) row.psnrDb = psnrDb(baselinePath, capPath); else row.notes.push("captura sin path");
 
       const rm = await tool("manage_clip_effects_uxp", { action: "remove", media_type: "video", track_index: 0, clip_index: 0, effect_id: eff, expected_effect_id: eff, component_index: compIndex });
@@ -189,7 +200,7 @@ async function audioSweep() {
     }
   };
   walk(catalogResult);
-  const effects = [...new Set(names)].sort();
+  const effects = [...new Set(names.concat((catalogResult.audio && catalogResult.audio.displayNames) || []))].sort();
   console.log(`[r8-audio] catálogo audio: ${effects.length} entradas`);
   const rows = [];
   const list = effects.slice(0, MAX);
