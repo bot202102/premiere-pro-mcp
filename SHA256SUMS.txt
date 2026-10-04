@@ -1,3 +1,3 @@
-# Fork sec/1.19.0-6 = upstream post-v1.19.0 (15 commits) + hardening + arbitraje + lease + startBatch híbrido. Carril: corepack pnpm.
-d76123192565caaed51ac80c74795ef501944894839c2676eaf70bb4c17cb281 *premiere-pro-mcp-1.19.0.tgz
+# Fork sec/1.19.0-7 = + describe_tool self-describing contracts (familia F-A/B/C/D). Carril: corepack pnpm.
+e4d89bd31801d447ea2f21594b842def6ff9ed1d0a1129bc17157bed5ee04356 *premiere-pro-mcp-1.19.0.tgz
 3fe2377c0ee5d04c5b22e27b7b160a2e67d1b9d628fb44103489eedca6e55513 *artifacts/premiere-pro-mcp-uxp-1.19.0-direct.ccx
