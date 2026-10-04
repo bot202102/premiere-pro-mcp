@@ -32,6 +32,20 @@ const child = spawn("premiere-pro-mcp.cmd", [], { shell: true, env, cwd: __dirna
 function killTree() { if (child.pid && !child.killed) { try { spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", timeout: 10000 }); } catch (_) {} } }
 process.on("exit", killTree);
 
+// Anti-huérfano (R10 incidente sweep): un TaskStop externo mata al lanzador
+// (bash) pero no a este node — el barrido siguió corriendo tras la "parada".
+// Vigilancia del padre: si muere y no fuimos lanzados destacados
+// (SESSION_DETACHED=1), salir — el handler "exit" arrastrará al server hijo.
+const WATCH_PARENT_PID = process.ppid;
+if (process.env.SESSION_DETACHED !== "1") {
+  setInterval(() => {
+    try { process.kill(WATCH_PARENT_PID, 0); }
+    catch (e) {
+      if (e.code === "ESRCH") { console.error("[watch] lanzador " + WATCH_PARENT_PID + " muerto: saliendo"); process.exit(2); }
+    }
+  }, 5000).unref();
+}
+
 let buf = ""; const pending = new Map(); let nextId = 1000;
 child.stdout.on("data", (d) => {
   buf += d; let i;
