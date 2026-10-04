@@ -199,93 +199,102 @@ async function videoSweep() {
 }
 
 async function audioSweep() {
-  await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "r8-sweep-audio", version: "1" } });
-  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-  if (!await waitBridge()) throw new Error("UXP bridge not connected");
   if (!PRESET) throw new Error("--preset EPR requerido en modo --audio (render por efecto)");
   const cat = await tool("manage_clip_effects_uxp", { action: "catalog", media_type: "audio" });
   const catalogResult = extractResult(cat.text);
   const names = [];
-  const walk = (node) => {
-    if (!node || typeof node !== "object") return;
-    for (const [k, v] of Object.entries(node)) {
-      if ((k === "displayName" || k === "matchName") && typeof v === "string") names.push(v);
-      else if (v && typeof v === "object") walk(v);
-    }
-  };
+  const walk = (node) => { if (!node || typeof node !== "object") return; for (const [k, v] of Object.entries(node)) { if ((k === "displayName" || k === "matchName") && typeof v === "string") names.push(v); else if (v && typeof v === "object") walk(v); } };
   walk(catalogResult);
   const effects = [...new Set(names.concat((catalogResult.audio && catalogResult.audio.displayNames) || []))].sort();
   console.log(`[r8-audio] catálogo audio: ${effects.length} entradas`);
   const rows = [];
   const list = effects.slice(0, MAX);
+  const compKey = (c) => (c.matchName || "") + "::" + (c.id || "") + "::" + (c.displayName || "");
+  const collect = (node) => { const out = []; const f = (n) => { if (!n || typeof n !== "object") return; if (Array.isArray(n.components)) out.push(...n.components); for (const v of Object.values(n)) if (v && typeof v === "object") f(v); }; f(node); return out; };
+  // baseline GLOBAL del sweep (lección R10/R11: un leftover de un efecto anterior
+  // no puede entrar al pre-keys del siguiente, o el apilamiento se vuelve invisible)
+  const baselineKeys = new Set(collect(extractResult((await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 })).text)).map(compKey));
   for (let i = 0; i < list.length; i++) {
     const eff = list[i];
     const row = { effect: eff, added: false, param: null, maxVolumeDb: null, removed: null, notes: [] };
     try {
-      const pre = await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 });
-      const preResult = extractResult(pre.text);
-      let preComps = []; const findP = (n) => { if (!n || typeof n !== "object") return; if (Array.isArray(n.components)) preComps = n.components; for (const v of Object.values(n)) if (v && typeof v === "object") findP(v); };
-      findP(preResult);
-      const preIds = new Set(preComps.map((c) => (c.matchName || c.id || "") + "|" + (c.displayName || "")));
+      const preComps = collect(extractResult((await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 })).text));
+      const preKeys = new Set(preComps.map(compKey));
       const add = await tool("manage_clip_effects_uxp", { action: "add", media_type: "audio", track_index: 0, clip_index: 0, effect_id: eff, expected_effect_id: eff });
-      if (add.isError) { row.notes.push("add: " + add.text.slice(0, 120)); rows.push(row); continue; }
+      if (add.isError) { row.notes.push("add: " + add.text.slice(0, 120)); rows.push(row); console.log(`[${i + 1}/${list.length}] ${eff} → add falló`); continue; }
       row.added = true;
-      const insp = await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 });
-      const inspResult = extractResult(insp.text);
-      let comps = []; const findC = (n) => { if (!n || typeof n !== "object") return; if (Array.isArray(n.components)) comps = n.components; for (const v of Object.values(n)) if (v && typeof v === "object") findC(v); };
-      findC(inspResult);
-      const mine = comps.find((c) => !preIds.has((c.matchName || c.id || "") + "|" + (c.displayName || "")) && !(c.matchName || "").startsWith("Internal"));
-      const idx = mine ? comps.indexOf(mine) : -1;
-      row.componentId = mine ? (mine.matchName || mine.id || "") : null;
+      const post = collect(extractResult((await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 })).text));
+      const foreign = post.filter((c) => !preKeys.has(compKey(c)) && !(c.matchName || "").startsWith("Internal"));
+      const mine = foreign[0] || null;
+      const idx = mine ? post.indexOf(mine) : -1;
+      row.componentId = mine ? compKey(mine) : null;
       if (idx >= 0) {
         for (let p = 0; p < 24; p++) {
           const pi = await tool("automate_effect_parameters_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p });
           if (pi.isError) continue;
           const pr = extractResult(pi.text);
-          if (typeof pr.value === "number") {
-            // cascada de candidatos: el rango varía por efecto y el host usa DOS
-            // formas de error ("must be from A to B" y "must be a finite number
-            // from A to B") — cubrir ambas y probar máximos progresivos.
-            // Params timeVarying (común en audio, R10): set_value no aplica —
-            // la vía es add_keyframe.
-            const isTv = pr.timeVarying === true;
-            const actionName = isTv ? "add_keyframe" : "set_value";
-            const extraArgs = isTv ? { time_seconds: 1 } : {};
-            const candidates = [100, 1, 0.95, 24, 20, 50, -1];
-            let applied = null;
+          if (typeof pr.value !== "number") continue;
+          // R11: semántica de audio = normalizada + TV → add_keyframe PRIMERO si
+          // el param es TV; set_value solo primer intento para no-TV. Cascada con
+          // parse de rango dual (ambas formas de error del host).
+          const routes = pr.timeVarying === true ? ["add_keyframe", "set_value"] : ["set_value", "add_keyframe"];
+          const candidates = [100, 1, 0.95, 24, 20, 50, -1];
+          let applied = null;
+          for (const actionName of routes) {
+            const extra = actionName === "add_keyframe" ? { time_seconds: 1 } : {};
             for (const target of candidates) {
-              const s1 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target, ...extraArgs });
+              const s1 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: target, ...extra });
               if (!s1.isError) { applied = { index: p, name: pr.paramName, value: target, via: actionName }; break; }
               const m = s1.text.match(/from (-?[\d.]+) to (-?[\d.]+)/);
               if (m) {
                 const hi = parseFloat(m[2]);
-                const s2 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: hi, ...extraArgs });
+                const s2 = await tool("automate_effect_parameters_uxp", { action: actionName, media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, param_index: p, value: hi, ...extra });
                 if (!s2.isError) { applied = { index: p, name: pr.paramName, value: hi, via: actionName }; break; }
               }
             }
-            if (!applied) { row.notes.push("set agotado p" + p); continue; }
-            row.param = applied;
-            break;
+            if (applied) break;
           }
+          if (!applied) { row.notes.push("sin vía p" + p); continue; }
+          row.param = applied;
+          break;
         }
-      }
+      } else row.notes.push("componente nuevo no detectado");
       const out = path.join(OUT, "audio-" + String(i).padStart(3, "0") + ".mp4");
       const render = await tool("add_to_render_queue", { output_path: out, preset_path: PRESET }, 180000);
       if (render.isError) { row.notes.push("render: " + render.text.slice(0, 120)); }
       else {
-        let lastSize = -1; for (let w = 0; w < 40; w++) { await sleep(5000); if (fs.existsSync(out)) { const s = fs.statSync(out).size; if (s > 10000 && s === lastSize) break; lastSize = s; } }
+        // R11 (defecto a): volumedetect contra render incompleto → esperar cola
+        // AME inactiva (receipt de estado) Y tamaño estable en 2 sondeos seguidos.
+        let stable = 0, lastSize = -1;
+        for (let w = 0; w < 48; w++) {
+          await sleep(5000);
+          const qs = await tool("get_render_queue_status", {}, 30000).catch(() => ({ text: "" }));
+          const busy = /running|rendering|encoding|progressing|"busy"\s*:\s*true/i.test(qs.text);
+          const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
+          if (!busy && size > 10000 && size === lastSize) { stable++; if (stable >= 2) break; } else stable = 0;
+          lastSize = size;
+        }
         await sleep(3000);
         let m = null;
-        for (let attempt = 0; attempt < 2 && !m; attempt++) {
-          if (attempt) await sleep(5000); // el render puede seguir escribiendo: un retry tras pausa
+        for (let attempt = 0; attempt < 3 && !m; attempt++) {
+          if (attempt) await sleep(5000);
           const v = spawnSync("ffmpeg", ["-i", out, "-af", "volumedetect", "-f", "null", "-"], { timeout: 120000 });
           m = String(v.stderr).match(/max_volume: (-?[\d.]+) dB/);
         }
         row.maxVolumeDb = m ? parseFloat(m[1]) : null;
-        if (!m) row.notes.push("volumedetect sin dato tras retry");
+        if (!m) row.notes.push("volumedetect sin dato");
       }
-      const rm = idx >= 0 ? await tool("manage_clip_effects_uxp", { action: "remove", media_type: "audio", track_index: 0, clip_index: 0, component_index: idx, effect_id: (mine && (mine.matchName || mine.id)) || eff, expected_effect_id: (mine && (mine.matchName || mine.id)) || eff }) : await Promise.resolve({ isError: true, text: "idx -1" });
-      row.removed = !rm.isError;
+      // R11 (defecto b): limpieza por diff contra el BASELINE GLOBAL — retira
+      // todos los foráneos añadidos (índice fresco por pasada; nada se apila).
+      for (let pass = 0; pass < 8; pass++) {
+        const cur = collect(extractResult((await tool("manage_clip_effects_uxp", { action: "inspect", media_type: "audio", track_index: 0, clip_index: 0 })).text));
+        const outsiders = cur.filter((c) => !baselineKeys.has(compKey(c)) && !(c.matchName || "").startsWith("Internal"));
+        if (!outsiders.length) { row.removed = true; break; }
+        const victim = outsiders[0];
+        const rm = await tool("manage_clip_effects_uxp", { action: "remove", media_type: "audio", track_index: 0, clip_index: 0, component_index: cur.indexOf(victim), effect_id: victim.matchName || victim.id || eff, expected_effect_id: victim.matchName || victim.id || eff });
+        if (rm.isError) { row.removed = false; row.notes.push("remove: " + rm.text.slice(0, 100)); break; }
+      }
+      if (row.removed !== true) row.removed = false;
     } catch (e) { row.notes.push("excepción: " + String(e.message).slice(0, 120)); }
     rows.push(row);
     console.log(`[${i + 1}/${list.length}] ${eff} → max ${row.maxVolumeDb} dB${row.removed === false ? " (SIN REMOVER)" : ""}`);
