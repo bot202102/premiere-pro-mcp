@@ -42,7 +42,7 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
   };
   return {
     add_transition: {
-      description: "EXPERIMENTAL (undocumented QE DOM): Add a video transition between two clips at a cut point. Reads the transition back from the sequence track.",
+      description: "EXPERIMENTAL (undocumented QE DOM): Add a video transition between two clips at a cut point. Reads the transition back from the sequence track. Alignment defaults to center; handle-limited results are reported as verified_with_deviation with the available handle frames.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -62,6 +62,11 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
             type: "number",
             description: "Duration of the transition in seconds (default: 1.0)",
           },
+          alignment: {
+            type: "string",
+            enum: ["center", "start", "end"],
+            description: "Where the transition sits relative to the cut: center (default, straddles both clips), start (toward the incoming clip), end (toward the outgoing clip). Handle-limited media shortens the transition regardless of alignment.",
+          },
         },
         required: ["transition_name", "track_index", "cut_point_seconds"],
       },
@@ -70,8 +75,10 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
         track_index: number;
         cut_point_seconds: number;
         duration_seconds?: number;
+        alignment?: "center" | "start" | "end";
       }) => {
         const duration = args.duration_seconds ?? 1.0;
+        const alignment = args.alignment ?? "center";
         if (!Number.isFinite(args.cut_point_seconds) || args.cut_point_seconds < 0) {
           return { success: false, error: "cut_point_seconds must be finite and non-negative timeline seconds." };
         }
@@ -125,7 +132,7 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
             var candidate2 = domTrack.clips[c2];
             if (Math.abs(parseFloat(candidate2.start.ticks) - cutTicks) < 1) { incomingClip = candidate2; break; }
           }
-          if (!incomingClip && !outgoingClip) return __error("No video clip edge exists at the requested cut point, so no transition was attempted.");
+          if (!incomingClip && !outgoingClip) return __error("No video clip edge exists at the requested cut point, so no transition was attempted. Inspect the track first: list_available_transitions names valid transition_name values, and the cut must land exactly on the shared edge of two clips (get_track_info shows clip boundaries).");
           // Premiere 26.3.2 confirms arg 2 is the clip edge: true=head,
           // false=tail. Prefer the incoming head and fall back to the outgoing tail.
           var targetClip = incomingClip || outgoingClip;
@@ -144,11 +151,20 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
           }
           var transitionKeysBefore = __transitionKeys(domTrack);
           var transitionCountBefore = domTrack.transitions.numItems;
+          // FORK-DIVERGENCE (#558 repro, approach from upstream issue #773):
+          // alignment is exposed as a parameter (center default) mapped to the
+          // QE call's alignment argument; handle-limited media is reported as
+          // verified_with_deviation with the exact handle frames instead of a
+          // bare success. Errors above teach the contract per F-A.
+          var alignmentFraction = ${alignment === "start" ? 0 : alignment === "end" ? 1 : 0.5};
+          var handlesOut = { outgoingTailFrames: 0, incomingHeadFrames: 0 };
+          if (outgoingClip) handlesOut.outgoingTailFrames = Math.max(0, Math.round((parseFloat(outgoingClip.end.ticks) - cutTicks) / frameTicks));
+          if (incomingClip) handlesOut.incomingHeadFrames = Math.max(0, Math.round((cutTicks - parseFloat(incomingClip.start.ticks)) / frameTicks));
           try {
             // QE transition writes belong to the clip. The legacy method takes
             // a clip edge, duration as timecode on the sequence frame grid, offset, alignment, and
             // single-sided flags; DOM readback below decides whether it worked.
-            qeClip.addTransition(transitionQE, targetHead, __transitionTimecode(durationFrames, frameTicks), "0", 0.5, false, true);
+            qeClip.addTransition(transitionQE, targetHead, __transitionTimecode(durationFrames, frameTicks), "0", alignmentFraction, false, true);
           } catch (transitionError) {
             return __transitionAttemptFailure(domTrack, transitionCountBefore, "QE clip addTransition rejected the transition: " + transitionError.toString());
           }
@@ -169,7 +185,10 @@ export function getTransitionsTools(bridgeOptions: BridgeOptions) {
           return __result({
             added: true,
             verified: true,
-            outcome: "verified",
+            outcome: (Math.abs(__transitionReadbacks(domTrack, transitionKeysBefore)[0].durationSeconds - ${duration}) <= frameTicks / TICKS_PER_SECOND) ? "verified" : "verified_with_deviation",
+            deviation: (Math.abs(__transitionReadbacks(domTrack, transitionKeysBefore)[0].durationSeconds - ${duration}) <= frameTicks / TICKS_PER_SECOND) ? null : "Transition shortened by limited source handles at the cut: the applied duration equals the smaller side's available frames. Extend clip handles or reduce duration_seconds to get the requested length.",
+            alignment: "${alignment}",
+            handles: handlesOut,
             transition: transitionName,
             trackIndex: ${args.track_index},
             atSeconds: ${args.cut_point_seconds},
