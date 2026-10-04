@@ -913,7 +913,12 @@
       const project = await ppro.Project.getActiveProject();
       if (!project) throw commandError("UXP_NO_ACTIVE_PROJECT", "No active project");
       const clip = await resolveClipProjectItem(project, { projectItemId: wantedId, projectItemName: wantedName });
-      const itemId = await clip.getId();
+      // FORK-DIVERGENCE (#772): ProjectItem does not expose getId() on 26.5.2 —
+      // the unguarded call crashed every transcribe request. The transcript
+      // start itself does not need the id; read it only when the host offers
+      // it. KEEP until upstream ships a guarded version (issue leancoderkavy#772).
+      let itemId = null;
+      try { itemId = typeof clip.getId === "function" ? await clip.getId() : null; } catch (_) {}
       const accepted = await ppro.Transcript.transcribeClipProjectItem(clip, language ? { language } : undefined);
       if (accepted !== true) throw commandError("UXP_VERIFICATION_FAILED", "Premiere did not confirm the transcription start request");
       return {
