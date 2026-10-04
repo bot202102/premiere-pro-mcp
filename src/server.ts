@@ -33,6 +33,7 @@ import { getSourceMonitorTools } from "./tools/source-monitor.js";
 import { getTrackTargetingTools } from "./tools/track-targeting.js";
 import { getUtilityTools } from "./tools/utility.js";
 import { getHealthTools } from "./tools/health.js";
+import { getDescribeToolTool } from "./tools/describe-tool.js";
 import { getWorkspaceTools } from "./tools/workspace.js";
 import { getCaptionTools } from "./tools/captions.js";
 import { getPlaybackTools } from "./tools/playback.js";
@@ -349,6 +350,7 @@ export function collectTools(
     ...getCompetitorGapTools(bridgeOptions, uxpBridge),
     ...getMediaWatchTools(mediaWatchRegistry),
     ...(getUxpTools(uxpBridge)),
+    ...(getDescribeToolTool(() => tools)),
   };
   Object.assign(
     tools,
