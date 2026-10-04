@@ -135,7 +135,7 @@ describe("modern MCP surface", () => {
       // FORK-DIVERGENCE: UXP tools register deterministically even without a
       // connected bridge (upstream: 384 without bridge) — a call without a
       // bridge fails honestly per call instead of the tool vanishing.
-      expect(tools.tools).toHaveLength(479);
+      expect(tools.tools).toHaveLength(480); // + describe_tool (fork)
       expect(tools.tools.map((tool) => tool.name)).toContain("get_uxp_state");
       const uxpProbe = await client.callTool({ name: "get_uxp_state", arguments: {} });
       expect(uxpProbe.isError).toBe(true);
