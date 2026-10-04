@@ -764,7 +764,13 @@ describe("Tool Handler Behavior", () => {
       expect(script).toContain("var targetClip = incomingClip || outgoingClip");
       expect(script).toContain("__findQeClipByDomClip(qeTrack, targetClip)");
       expect(script).toContain('typeof qeClip.addTransition !== "function"');
-      expect(script).toContain('qeClip.addTransition(transitionQE, targetHead, __transitionTimecode(durationFrames, frameTicks), "0", 0.5, false, true)');
+      // FORK-DIVERGENCE (#558/#773 approach): alignment param maps to the QE
+      // alignment argument (center default = 0.5), handles + deviation receipt.
+      expect(script).toContain('qeClip.addTransition(transitionQE, targetHead, __transitionTimecode(durationFrames, frameTicks), "0", alignmentFraction, false, true)');
+      expect(script).toContain('var alignmentFraction = 0.5;');
+      expect(script).toContain("handlesOut.incomingHeadFrames");
+      expect(script).toContain("verified_with_deviation");
+      expect(script).toContain("shortened by limited source handles");
       expect(script).not.toContain("qeTrack.addTransition(");
       expect(script).toContain("__newTransitionCovers(domTrack, transitionKeysBefore, cutTicks, frameTicks)");
       expect(script).toContain("DOM readback did not find a new one at the requested cut point");
