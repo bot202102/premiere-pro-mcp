@@ -35,6 +35,14 @@ sin equivalente upstream).
 | pnpm supply-chain (minimumReleaseAge 7d, no-build-scripts, overrides) | `pnpm-workspace.yaml` | Cadena de suministro | — | **SEC — permanente** |
 | .npmignore per-file + tarball pin SHA256 | `.npmignore`, `SHA256SUMS.txt` | El .debug CEP no puede salir jamás en el paquete | — | **SEC — permanente** |
 
+## 2b. FOTO FORENSE DE DIVERGENCIA (03-10, post-v1.19.0)
+
+- Posición: upstream/main = fda9ea2+**15 commits** (ola backlog-review #766-776, autoría "Cursor Agent") | nuestro main = **+111 commits / 59 archivos / +6051 líneas** sobre la misma base.
+- Próximo sync (15 upstream, 57 archivos): **solo 6 archivos solapan** con nuestros cambios — los 2 KEEP (export.ts startBatch, script-builder pre-razor zona), commands.cjs (#772: upstream YA lo arregló a su manera → PREFER-UPSTREAM limpio), uxp.ts + uxp-advanced-workflows.ts (catálogo estable/renderHonesty, nuestros), test ame-native-paths.
+- **NUEVO conflicto semántico**: 1f87c23 upstream hace OPT-IN el startBatch en encode_project_item/encode_file/manage_proxies (razón legítima: arranca jobs ajenos). Decisión en sync: adoptar opt-in en los 3 secundarios, conservar auto SOLO en add_to_render_queue (nuestro live-verificado).
+- Velocidad: upstream 102 commits/7d en ráfaga (releases cada ~4 días cuando activo); nosotros en sprints (111/2d durante R6-R10).
+- Proyección: sync por release (~semanal) mantiene conflictos <10 archivos; acumular 2+ releases crece el solape en los hot-files (script-builder, export). #771 abierto sin respuesta; #772 cerrado por ellos (absorbido).
+
 ## 3. QUÉ MONITOREAR EN UPSTREAM (puntos de quiebre)
 
 Al inicio de cada sesión de trabajo, revisar en este orden. Un cambio en cualquiera
