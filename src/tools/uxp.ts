@@ -1,4 +1,4 @@
-import type { UxpWebSocketBridge } from "../bridge/uxp-websocket-bridge.js";
+import { UxpWebSocketBridge } from "../bridge/uxp-websocket-bridge.js";
 import { planTranscriptRoughCut, previewTranscriptEdit, transcriptRevision } from "./transcript-edits.js";
 import { getUxpAdvancedWorkflowTools } from "./uxp-advanced-workflows.js";
 import { getUxpDialogueWorkflowTools } from "./uxp-dialogue-workflows.js";
@@ -35,6 +35,11 @@ function invoke(
 }
 
 export function getUxpTools(bridge?: UxpWebSocketBridge) {
+  // FORK-DIVERGENCE (R10 X): the catalog is stable with or without a bridge.
+  // Without one, handlers run against this detached instance whose request()
+  // throws the honest "Premiere UXP bridge is not connected" per call
+  // (upstream omitted the whole UXP catalog without a bridge).
+  bridge = bridge ?? new UxpWebSocketBridge({ token: "uxp-detached-no-bridge-placeholder-00", port: 0 });
   const operationId = {
     type: "string" as const,
     description: "Optional idempotency key (1-128 letters, numbers, dot, underscore, colon, or dash).",
