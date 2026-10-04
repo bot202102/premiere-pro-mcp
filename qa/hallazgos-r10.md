@@ -101,3 +101,13 @@ guard + identidad alternativa (el `transcribeClipProjectItem` no depende del id)
 ### Floor R10 → adoptado. La R11 hereda además: catálogo 479 (verificar conteo),
 arbitraje (salto de propiedad entre 2 servers vivos sin matar nada — el caso que el
 lease no cubría), y el driver audio con vía TV.
+
+### #772 → **FIX EN NUESTRO FORK + VERIFICADO EN VIVO (sin esperar upstream)** (sec/1.19.0-5)
+
+`uxp-plugin/commands.cjs` `transcribeClip`: guard en `getId()` (FORK-DIVERGENCE KEEP).
+Verificación en vivo tras reinicio canónico: transcribe → `started:true`;
+`has_transcript` → `true` (nativo); `get_clip_transcript` → JSON es-es con timeline de
+palabras; `search "subtítulos"` → match. Transcript vs frase fuente (TTS Helena):
+**verbatim ~100%**. La superficie de transcripts está desbloqueada en 26.5.2 con
+nuestro fork — pipeline captions disponible. Issue leancoderkavy#772 queda como
+documentación; disposition: KEEP hasta upstream con guard, entonces PREFER-UPSTREAM.
