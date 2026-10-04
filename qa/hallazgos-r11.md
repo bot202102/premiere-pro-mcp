@@ -150,3 +150,20 @@ Limpieza: keyframes removidos, opacidad estática 100, proyecto guardado.
 **Contrato aprendido (self-describing)**: `describe_tool`/`add_transition` notes ahora deben incluir: nombres de transición localizados + requirement de borde exacto. Añadido al patch siguiente.
 
 Fixture: R12-Trans eliminada, stress4 guardado. describe_tool dogfooded en vivo ✓.
+
+## EXPERIMENTO DISCRIMINANTE #771 (04-10) — CORRECCIÓN MAYOR
+
+El mantenedor respondió #771 con un contra-dato (25.2.3 macOS: H.264 render SÍ honra
+linear/hold/bezier; solo exportFramePNG no). Corrimos su experimento pedido en 26.5.2:
+render AME del mismo fixture, medición por frame del MP4 → **el H.264 SÍ honra las
+curvas** (linear rampa 51.4, hold plano 84.6, bezier eased 17.7; snap a negro tras el
+último key). **El gap es SOLO del exportador de frames QE** (capture_frame evalúa
+pre-key hasta snap) — el artefacto de captura hizo que 3 rondas concluyeran
+"render no honra curvas".
+
+**CORRECCIÓN OPERATIVA MAYOR: LOS FADES SUAVES Y EL EASING SÍ FUNCIONAN EN PRODUCCIÓN**
+por render AME (linear/hold/bezier verificados). Solo hay que verificar contra el MP4,
+nunca contra capture_frame. El renderHonesty del fork se corrigió al texto real
+("capture_frame no evalúa keyframed values; verificar contra render"), y el test del
+repositorio actualizado. Evidencia: `runs/ame-interp-{linear,hold,bezier}.mp4` +
+`ame-interp-resultados.json` + comentario en leancoderkavy#771.
