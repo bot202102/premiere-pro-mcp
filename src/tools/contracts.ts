@@ -35,6 +35,15 @@ export const TOOL_CONTRACT_NOTES: Record<string, string[]> = {
   remove_all_effects: [
     "En hosts es-ES el guard de built-ins localizados (#674) protege componentes como 'Volumen' — las limpiezas quirúrgicas van por manage_clip_effects_uxp remove.",
   ],
+  add_transition_to_clip: [
+    "Mismo contrato que add_transition: transition_name es LOCALIZADO ('Disolución cruzada (heredado)' en es-ES, no 'Cross Dissolve').",
+  ],
+  batch_add_transitions: [
+    "Mismo contrato: transition_name LOCALIZADO por corte; el batch falla por corte y el receipt lista los fallidos.",
+  ],
+  apply_audio_effect: [
+    "Los efectos de AUDIO se nombran por displayName es-ES (p. ej. 'Ecualizador paramétrico', 'Amplificación') — verificado en barrida R11; el catálogo de audio solo expone displayNames localizados.",
+  ],
   add_transition: [
     "transition_name es LOCALIZADO del host (es-ES: 'Disolución cruzada (heredado)', no 'Cross Dissolve') — list_available_transitions lista los válidos.",
     "cut_point_seconds debe caer EXACTAMENTE en el borde compartido de dos clips (get_track_info muestra los bordes).",
