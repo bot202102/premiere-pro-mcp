@@ -350,7 +350,7 @@ export function collectTools(
     ...getCompetitorGapTools(bridgeOptions, uxpBridge),
     ...getMediaWatchTools(mediaWatchRegistry),
     ...(getUxpTools(uxpBridge)),
-    ...(getDescribeToolTool(() => tools)),
+    ...(getDescribeToolTool(() => tools as unknown as Record<string, { name: string; description?: string; parameters?: Record<string, unknown>; annotations?: Record<string, unknown> }>)),
   };
   Object.assign(
     tools,
