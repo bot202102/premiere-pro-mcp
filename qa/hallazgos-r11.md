@@ -133,3 +133,20 @@ del CLIP de timeline (`get_clip_at_position`), no el del project item.
 evidencia triple; re-evaluar con builds Adobe nuevos.
 
 Limpieza: keyframes removidos, opacidad estática 100, proyecto guardado.
+
+## VERIFICACIÓN LIVE DEL PATCH DE TRANSICIONES (04-10, sec/1.19.0-8) — REVIVIDAS
+
+`runs/r12-trans-live.cjs` sobre secuencia desechable R12-Trans:
+
+| Caso | Resultado |
+|---|---|
+| **A**: Cross Dissolve 0.5s centered en corte 7.48 (clips contiguos) | **VERDE**: `added:true, verified:true, outcome:verified, durationMatched:true`, placement 7.24–7.76 straddling, `undoSteps:1` |
+| **B**: 1.2s en corte 13.48 | **VERDE**: 1.2s exactos, placement 12.88–14.08 |
+| Segundo add sobre corte SIN borde (11.48) | Honest F-A: "No video clip edge exists… list_available_transitions + get_track_info" ✓ |
+| describe_tool en vivo | ok (schema de set_item_in_out servido; notas curadas 0 para esa tool — solo globalNotes, correcto) |
+
+**Causa raíz del false-failure histórico (R2/R11): el nombre de transición es LOCALIZADO** — "Cross Dissolve" no resuelve en es-ES; el real es **"Disolución cruzada (heredado)"** (`list_available_transitions`). Con nombre real: QE addTransition aplica y verifica. Los handles reportan 0/0 con clips contiguos exactos (correcto); el caso handle-limitado (deviation) queda para el tester con media de sobra.
+
+**Contrato aprendido (self-describing)**: `describe_tool`/`add_transition` notes ahora deben incluir: nombres de transición localizados + requirement de borde exacto. Añadido al patch siguiente.
+
+Fixture: R12-Trans eliminada, stress4 guardado. describe_tool dogfooded en vivo ✓.
