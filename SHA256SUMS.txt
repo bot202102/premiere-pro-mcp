@@ -1,3 +1,3 @@
-# Fork sec/1.19.0-7 = + describe_tool self-describing contracts (familia F-A/B/C/D). Carril: corepack pnpm.
-e4d89bd31801d447ea2f21594b842def6ff9ed1d0a1129bc17157bed5ee04356 *premiere-pro-mcp-1.19.0.tgz
+# Fork sec/1.19.0-8 = + transition alignment/handles/deviation (#558). Carril: corepack pnpm.
+3600c50753f2d88db75c7fdad52ce22ba2c137c8f43a21540e70220ebba1e695 *premiere-pro-mcp-1.19.0.tgz
 3fe2377c0ee5d04c5b22e27b7b160a2e67d1b9d628fb44103489eedca6e55513 *artifacts/premiere-pro-mcp-uxp-1.19.0-direct.ccx
