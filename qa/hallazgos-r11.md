@@ -91,3 +91,45 @@ Los 3 defectos documentados quedan corregidos de raíz en `sec-tools/r8-effect-s
 | (c) cascada no cubría semántica normalizada/TV | **rutas por orden de semántica**: `add_keyframe` PRIMERO si el param es TV, `set_value` primero si no, con fallback a la otra ruta; candidatos + parse de rango dual |
 
 Re-drive de los 55 listo (R12): el criterio objetivo ya está establecido por el muestreo R11 (59/61 renders con Δ ≥ 3 dB medidos standalone).
+
+## SONDA ADICIONAL DEL REPARADOR — interpolación por CEP (03-10 noche)
+
+Pregunta abierta tras R9: ¿el render honra curvas si los keyframes se escriben por
+CEP? Respuesta con sonda limpia (`runs/cep-interp-probe-v2.cjs`, 100% ruta CEP):
+
+| modo | t1.5 | t2.45 | t2.6 |
+|---|---|---|---|
+| linear | 84.05 | 84.33 | **16.94** |
+| bezier | 84.05 | 84.33 | **16.94** |
+| hold | 84.08 | 84.45 | **16.94** |
+
+**Idéntico al resultado UXP: el gap de interpolación es de HOST (gap-wide), no de
+ruta de escritura.** Tercera vía confirmada (CEP ExtendScript con nombres
+localizados), evidencia subida a #771. Gotchas #674-familia para reproducir:
+efecto Y propiedad se llaman "Opacidad" en es-ES, y `add_keyframe` pide el nodeId
+del CLIP de timeline (`get_clip_at_position`), no el del project item.
+**Fades suaves: NO disponibles por ninguna ruta en 26.5.2** — caso cerrado con
+evidencia triple; re-evaluar con builds Adobe nuevos.
+
+Limpieza: keyframes removidos, opacidad estática 100, proyecto guardado.
+
+## SONDA ADICIONAL DEL REPARADOR — interpolación por CEP (03-10 noche)
+
+Pregunta abierta tras R9: ¿el render honra curvas si los keyframes se escriben por
+CEP? Respuesta con sonda limpia (`runs/cep-interp-probe-v2.cjs`, 100% ruta CEP):
+
+| modo | t1.5 | t2.45 | t2.6 |
+|---|---|---|---|
+| linear | 84.05 | 84.33 | **16.94** |
+| bezier | 84.05 | 84.33 | **16.94** |
+| hold | 84.08 | 84.45 | **16.94** |
+
+**Idéntico al resultado UXP: el gap de interpolación es de HOST (gap-wide), no de
+ruta de escritura.** Tercera vía confirmada (CEP ExtendScript con nombres
+localizados), evidencia subida a #771. Gotchas #674-familia para reproducir:
+efecto Y propiedad se llaman "Opacidad" en es-ES, y `add_keyframe` pide el nodeId
+del CLIP de timeline (`get_clip_at_position`), no el del project item.
+**Fades suaves: NO disponibles por ninguna ruta en 26.5.2** — caso cerrado con
+evidencia triple; re-evaluar con builds Adobe nuevos.
+
+Limpieza: keyframes removidos, opacidad estática 100, proyecto guardado.
