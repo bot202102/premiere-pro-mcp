@@ -1612,7 +1612,7 @@ describe("advanced stable Premiere UXP workflows", () => {
     await expect(value.registry.dispatch("parameters.keyframeInterpolation", {
       mediaType: "video", trackIndex: 0, clipIndex: 0, componentIndex: 0, paramIndex: 0,
       timeSeconds: 1, interpolation: "linear", operationId: "linear-render-boundary",
-    })).resolves.toMatchObject({ verified: true, renderVerified: false, renderHonesty: expect.stringContaining("26.5.2") });
+    })).resolves.toMatchObject({ verified: true, renderVerified: false, renderHonesty: expect.stringContaining("capture_frame") });
   });
 
   it("uses complete keyframe preflight/readback and reports absent removals as no-ops", async () => {

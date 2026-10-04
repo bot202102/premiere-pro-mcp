@@ -1528,7 +1528,7 @@
       return mutationResult(verified, {
         updated: true, interpolation: modeName, interpolationValue: readback,
         renderVerified: false,
-        renderHonesty: "Verification covers the stored interpolation mode only. Premiere 26.5.2 Windows has a reported render gap where linear, hold and bezier render identically; inspect playback or exported pixels before delivery."
+        renderHonesty: "Verification covers the stored interpolation mode only. IMPORTANT: capture_frame (QE exportFramePNG) does NOT evaluate keyframed values on this build — it shows the pre-key value until a snap. The H.264 render DOES honor the stored curves (live-measured: linear ramps, hold flats, bezier eases). Verify animated values against a rendered export, never against capture_frame."
       }, "keyframe_interpolation_readback", "Set keyframe interpolation");
     }
 
